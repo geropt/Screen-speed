@@ -1,0 +1,3 @@
+OSM data can be acquired from following link
+
+https://download.geofabrik.de/
