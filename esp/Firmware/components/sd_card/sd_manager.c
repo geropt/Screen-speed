@@ -36,7 +36,7 @@ static esp_err_t s_example_write_file(const char *path, char *data)
         ESP_LOGE(TAG, "Failed to open file for writing");
         return ESP_FAIL;
     }
-    fprintf(f, data);
+    fprintf(f, "%s", data);
     fclose(f);
     ESP_LOGI(TAG, "File written");
 

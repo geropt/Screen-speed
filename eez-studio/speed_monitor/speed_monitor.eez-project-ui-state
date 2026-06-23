@@ -3,7 +3,7 @@
     "selectedUserPageObject": "[speed_monitor.eez-project]:/userPages/0",
     "selectedUserWidgetObject": "[speed_monitor.eez-project]:/userWidgets/0",
     "selectedGlobalVariableObject": "[speed_monitor.eez-project]:/variables/globalVariables/0",
-    "selectedFontObject": "[speed_monitor.eez-project]:/fonts/1",
+    "selectedFontObject": "[speed_monitor.eez-project]:/fonts/3",
     "subnavigationSelectedItems": {
       "variables-tab/sub-navigation/selected-item": "Global"
     }
@@ -26,6 +26,7 @@
           },
           {
             "type": "border",
+            "selected": 1,
             "size": 230.5,
             "location": "right",
             "children": [
@@ -81,6 +82,8 @@
           },
           {
             "type": "border",
+            "selected": 0,
+            "size": 57.5,
             "location": "bottom",
             "children": [
               {
@@ -127,7 +130,7 @@
             {
               "type": "row",
               "id": "#20f97b21-d368-427b-935b-f04c9b604f1f",
-              "weight": 17.49130351407722,
+              "weight": 22.560159266291855,
               "children": [
                 {
                   "type": "tabset",
@@ -199,22 +202,10 @@
             {
               "type": "tabset",
               "id": "EDITORS",
-              "weight": 51.19579556439669,
-              "selected": 1,
+              "weight": 46.12693981218204,
               "enableDeleteWhenEmpty": false,
               "enableClose": false,
               "children": [
-                {
-                  "type": "tab",
-                  "id": "#e8af9d01-f86f-40b6-953e-7194273d85d1",
-                  "name": "arc_indicator",
-                  "component": "editor",
-                  "config": {
-                    "objectPath": "[speed_monitor.eez-project]:/userWidgets/0",
-                    "permanent": false
-                  },
-                  "icon": "svg:user_widget"
-                },
                 {
                   "type": "tab",
                   "id": "#4baaf8bb-64d0-4ab4-8ec8-fa2d365b399c",
@@ -236,7 +227,7 @@
                 {
                   "type": "tabset",
                   "id": "#19d5b2dd-23df-4931-8d2c-81b31a88a494",
-                  "weight": 1.445578231292517,
+                  "weight": 1.9035971223021584,
                   "children": [
                     {
                       "type": "tab",
@@ -251,7 +242,7 @@
                 {
                   "type": "tabset",
                   "id": "#27447c75-92bb-4843-bac5-b8b82b85d5d2",
-                  "weight": 1.554421768707483,
+                  "weight": 1.0964028776978416,
                   "children": [
                     {
                       "type": "tab",
@@ -466,9 +457,21 @@
               "type": "tabset",
               "id": "RUNTIME-EDITORS",
               "weight": 1,
+              "selected": 1,
               "enableDeleteWhenEmpty": false,
               "enableClose": false,
               "children": [
+                {
+                  "type": "tab",
+                  "id": "#e69338d4-4027-48cb-b588-114534ffba72",
+                  "name": "arc_indicator",
+                  "component": "editor",
+                  "config": {
+                    "objectPath": "[speed_monitor.eez-project]:/userWidgets/0",
+                    "permanent": false
+                  },
+                  "icon": "svg:user_widget"
+                },
                 {
                   "type": "tab",
                   "id": "#10b6d157-17ec-48e5-bacf-5eef8c65bf70",
@@ -522,6 +525,89 @@
                       "id": "DEBUGGER_LOGS",
                       "name": "Logs",
                       "component": "logs",
+                      "enableClose": false,
+                      "icon": "svg:log"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "rootDockerSimulator": {
+      "version": 1,
+      "json": {
+        "global": {
+          "splitterSize": 4,
+          "splitterExtra": 4,
+          "tabEnableRename": false,
+          "borderEnableAutoHide": true
+        },
+        "borders": [],
+        "layout": {
+          "type": "row",
+          "id": "#bc7ae4a9-2811-4a31-8915-36a7f0cd123a",
+          "children": [
+            {
+              "type": "tabset",
+              "id": "#92a8809e-3f57-48a8-b17e-443ec99a3452",
+              "weight": 70,
+              "enableDrop": false,
+              "enableDrag": false,
+              "enableClose": false,
+              "enableTabStrip": true,
+              "children": [
+                {
+                  "type": "tab",
+                  "id": "DOCKER_SIMULATOR_PREVIEW",
+                  "name": "Preview",
+                  "component": "dockerSimulatorPreview",
+                  "enableClose": false,
+                  "icon": "material:computer"
+                }
+              ],
+              "active": true
+            },
+            {
+              "type": "row",
+              "id": "#5297b157-6b9c-421a-8abe-3b1e1f84f060",
+              "weight": 30,
+              "children": [
+                {
+                  "type": "tabset",
+                  "id": "#7c977e41-e725-4dc6-8568-53a16367deff",
+                  "weight": 50,
+                  "enableDrop": false,
+                  "enableDrag": false,
+                  "enableClose": false,
+                  "enableTabStrip": true,
+                  "children": [
+                    {
+                      "type": "tab",
+                      "id": "DOCKER_SIMULATOR_LOGS",
+                      "name": "Build Logs",
+                      "component": "dockerSimulatorLogs",
+                      "enableClose": false,
+                      "icon": "svg:log"
+                    }
+                  ]
+                },
+                {
+                  "type": "tabset",
+                  "id": "#426d80ac-db89-4250-b2b6-f2c1d804d2c1",
+                  "weight": 50,
+                  "enableDrop": false,
+                  "enableDrag": false,
+                  "enableClose": false,
+                  "enableTabStrip": true,
+                  "children": [
+                    {
+                      "type": "tab",
+                      "id": "DOCKER_SIMULATOR_PREVIEW_LOGS",
+                      "name": "Preview Logs",
+                      "component": "dockerSimulatorPreviewLogs",
                       "enableClose": false,
                       "icon": "svg:log"
                     }
@@ -1027,6 +1113,19 @@
         "position": 0,
         "secondToPx": 200,
         "scrollLeft": 0
+      },
+      "selectionFront": {},
+      "selectionBack": {
+        "0": {
+          "0": {
+            "1": {
+              "$selected": true
+            }
+          },
+          "1": {},
+          "3": {},
+          "4": {}
+        }
       }
     },
     "[speed_monitor.eez-project]:/userPages/1[flow-state]": {
@@ -1066,6 +1165,10 @@
         "position": 0,
         "secondToPx": 200,
         "scrollLeft": 0
+      },
+      "selectionFront": {},
+      "selectionBack": {
+        "$selected": true
       }
     }
   },

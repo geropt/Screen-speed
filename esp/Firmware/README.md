@@ -32,7 +32,7 @@ The firmware is built on three key ideas:
 The world is divided into fixed-size tiles:
 
 ```
-Tile size: 0.01° latitude × 0.01° longitude
+Tile size: 0.003° latitude × 0.003° longitude  (≈ 330 m × 270 m)
 ```
 Given a GPS coordinate:
 

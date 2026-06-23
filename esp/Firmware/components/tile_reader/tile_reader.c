@@ -12,28 +12,33 @@
 const static char *TAG = "TILE_READER";
 
 // ----------------- Binary read helpers -----------------
-static uint32_t read_u32(FILE *f) {
+// Each returns false on a short read (truncated/corrupt tile) so callers can
+// bail out instead of trusting garbage.
+static bool read_u32(FILE *f, uint32_t *out) {
     uint8_t b[4];
-    fread(b, 1, 4, f);
-    return (uint32_t)b[0] |
+    if (fread(b, 1, 4, f) != 4) return false;
+    *out = (uint32_t)b[0] |
            ((uint32_t)b[1] << 8) |
            ((uint32_t)b[2] << 16) |
            ((uint32_t)b[3] << 24);
+    return true;
 }
 
-static uint16_t read_u16(FILE *f) {
+static bool read_u16(FILE *f, uint16_t *out) {
     uint8_t b[2];
-    fread(b, 1, 2, f);
-    return (uint16_t)b[0] | ((uint16_t)b[1] << 8);
+    if (fread(b, 1, 2, f) != 2) return false;
+    *out = (uint16_t)b[0] | ((uint16_t)b[1] << 8);
+    return true;
 }
 
-static int32_t read_i32(FILE *f) {
+static bool read_i32(FILE *f, int32_t *out) {
     uint8_t b[4];
-    fread(b, 1, 4, f);
-    return  (int32_t)b[0] |
+    if (fread(b, 1, 4, f) != 4) return false;
+    *out = (int32_t)b[0] |
            ((int32_t)b[1] << 8) |
            ((int32_t)b[2] << 16) |
            ((int32_t)b[3] << 24);
+    return true;
 }
 
 // ------------------ tile index ------------------
@@ -136,79 +141,97 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
         return false;  // tile does not exist
     }
 
-    uint32_t segCount = read_u32(f);
+    char nameBuf[MAX_STREET_NAME + 1];
+
+    uint32_t segCount;
+    if (!read_u32(f, &segCount)) {
+        ESP_LOGE(TAG, "Corrupt tile (header) %s", filename);
+        fclose(f);
+        return false;
+    }
+
     float localBestDist = 1e12f;
     int   localBestSpeed = 0;
     char  localBestName[128] = "";
 
     for (uint32_t s = 0; s < segCount; s++) {
 
-        uint16_t numPoints = read_u16(f);
+        uint16_t numPoints;
+        if (!read_u16(f, &numPoints)) {
+            ESP_LOGE(TAG, "Corrupt tile (numPoints) %s", filename);
+            fclose(f);
+            return false;
+        }
+
+        // Sanity bound: a polyline far larger than any real OSM way means the
+        // stream is misaligned/corrupt. (MAX_POINTS is a generous upper limit.)
+        if (numPoints < 2 || numPoints > MAX_POINTS) {
+            ESP_LOGE(TAG, "Corrupt tile (numPoints=%u) %s", numPoints, filename);
+            fclose(f);
+            return false;
+        }
 
         float segBestDist = 1e12f;
 
-        // read all points into temporary local array
-        float *lats  = malloc(sizeof(float) * numPoints);
-        float *lons  = malloc(sizeof(float) * numPoints);
-
+        // Stream points one at a time, keeping only the previous one. This needs
+        // no dynamic allocation and handles arbitrarily long polylines.
+        float prevLat = 0, prevLon = 0;
         for (uint16_t p = 0; p < numPoints; p++) {
-            int32_t lat_i = read_i32(f);
-            int32_t lon_i = read_i32(f);
-            lats[p] = lat_i / 1e7f;
-            lons[p] = lon_i / 1e7f;
-        }
-
-        // Compute minimum distance to ANY segment Pi → Pi+1
-        for (uint16_t p = 0; p < numPoints - 1; p++) {
-
-            float d = distance_point_to_segment_haversine(
-                        lat, lon,
-                        lats[p],   lons[p],
-                        lats[p+1], lons[p+1]
-                    );
-            // ESP_LOGW(TAG, "new distance: %f", d);
-
-            if (d < segBestDist)
-            {
-                segBestDist = d;
-                // ESP_LOGI(TAG, "best distance updated; %f", d);
+            int32_t lat_i, lon_i;
+            if (!read_i32(f, &lat_i) || !read_i32(f, &lon_i)) {
+                ESP_LOGE(TAG, "Corrupt tile (points) %s", filename);
+                fclose(f);
+                return false;
             }
+            float curLat = lat_i / 1e7f;
+            float curLon = lon_i / 1e7f;
+
+            if (p > 0) {
+                float d = distance_point_to_segment_haversine(
+                            lat, lon, prevLat, prevLon, curLat, curLon);
+                if (d < segBestDist)
+                    segBestDist = d;
+            }
+            prevLat = curLat;
+            prevLon = curLon;
         }
 
-        free(lats);
-        free(lons);
-
-        uint16_t speed = read_u16(f);
-        uint16_t nameLen = read_u16(f);
-
-        char *nameBuf = malloc(nameLen + 1);
-        if (nameBuf) {
-            fread(nameBuf, 1, nameLen, f);
-            nameBuf[nameLen] = 0;
-        } else {
-            for (uint16_t i = 0; i < nameLen; i++) fgetc(f);
-            nameBuf = "";
+        uint16_t speed, nameLen;
+        if (!read_u16(f, &speed) || !read_u16(f, &nameLen)) {
+            ESP_LOGE(TAG, "Corrupt tile (meta) %s", filename);
+            fclose(f);
+            return false;
         }
 
-        // VALID STREET CHECK
+        // Read up to MAX_STREET_NAME bytes; if the stored name is longer, keep
+        // the prefix and skip the rest (don't treat a long name as corruption).
+        uint16_t readLen = (nameLen > MAX_STREET_NAME) ? MAX_STREET_NAME : nameLen;
+        if (fread(nameBuf, 1, readLen, f) != readLen) {
+            ESP_LOGE(TAG, "Corrupt tile (name) %s", filename);
+            fclose(f);
+            return false;
+        }
+        nameBuf[readLen] = 0;
+
+        if (nameLen > readLen && fseek(f, nameLen - readLen, SEEK_CUR) != 0) {
+            ESP_LOGE(TAG, "Corrupt tile (name skip) %s", filename);
+            fclose(f);
+            return false;
+        }
+
+        // VALID STREET CHECK: skip unnamed segments (service roads, etc.)
         bool validStreet = (nameLen > 0 && nameBuf[0] != 0);
-
-        if (validStreet)
-            *outTileHasData = true;  // good
-
-        // but ALSO check this:
         if (!validStreet)
             continue;
+
+        *outTileHasData = true;
 
         if (segBestDist < localBestDist) {
             localBestDist = segBestDist;
             localBestSpeed = speed;
             strncpy(localBestName, nameBuf, sizeof(localBestName)-1);
-            // ESP_LOGW(TAG, "updating fields name: %s \t speed: %d \t dist: %f", localBestName, localBestSpeed, localBestDist);
+            localBestName[sizeof(localBestName)-1] = 0;
         }
-
-        if (nameBuf && nameBuf != (char*)"")
-            free(nameBuf);
     }
 
     fclose(f);

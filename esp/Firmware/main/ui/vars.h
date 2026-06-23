@@ -10,8 +10,6 @@ extern "C" {
 
 // enum declarations
 
-
-
 // Flow global variables
 
 enum FlowGlobalVariables {
@@ -26,7 +24,6 @@ extern int32_t get_var_current_speed_value();
 extern void set_var_current_speed_value(int32_t value);
 extern int32_t get_var_speed_limit_value();
 extern void set_var_speed_limit_value(int32_t value);
-
 
 #ifdef __cplusplus
 }

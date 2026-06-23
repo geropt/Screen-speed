@@ -7,7 +7,7 @@
 #define TILE_INV    (1.0 / TILE_SIZE)                     // multiplication is faster and stable to perform than division
 #define TILE_PATH   MOUNT_POINT "/tiles"
 
-#define MAX_POINTS         256                 // max points per polyline segment
+#define MAX_POINTS         8192                // sanity cap on polyline length (corruption guard)
 #define MAX_STREET_NAME    128
 
 #define EARTH_RADIUS       6371000.0f

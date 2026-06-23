@@ -10,7 +10,17 @@ extern "C" {
 extern const lv_font_t ui_font_tjf_hardhatt_xtra_bold;
 extern const lv_font_t ui_font_tjf_hardhatt_bold;
 extern const lv_font_t ui_font_tjf_hardhatt_regular;
+extern const lv_font_t ui_font_street_name_latin;
 
+#ifndef EXT_FONT_DESC_T
+#define EXT_FONT_DESC_T
+typedef struct _ext_font_desc_t {
+    const char *name;
+    const void *font_ptr;
+} ext_font_desc_t;
+#endif
+
+extern ext_font_desc_t fonts[];
 
 #ifdef __cplusplus
 }

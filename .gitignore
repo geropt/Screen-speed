@@ -16,3 +16,7 @@ dependencies.lock
 *.swp
 .idea/
 .vscode/
+
+# Generated caches and map tiles (any depth)
+**/.cache/
+**/tiles/

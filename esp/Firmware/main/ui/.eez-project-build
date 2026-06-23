@@ -1,0 +1,22 @@
+{
+  "files": [
+    "actions.h",
+    "eez-flow.cpp",
+    "eez-flow.h",
+    "fonts.h",
+    "images.c",
+    "images.h",
+    "screens.c",
+    "screens.h",
+    "structs.h",
+    "styles.c",
+    "styles.h",
+    "ui.c",
+    "ui.h",
+    "ui_font_street_name_latin.c",
+    "ui_font_tjf_hardhatt_bold.c",
+    "ui_font_tjf_hardhatt_regular.c",
+    "ui_font_tjf_hardhatt_xtra_bold.c",
+    "vars.h"
+  ]
+}
