@@ -6,8 +6,11 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_system.h"
 #include "nmea_parser.h"
 #include "buttons.h"
+#include "diag_log.h"
+#include "splash.h"
 #include <math.h>
 #include <string.h>
 
@@ -35,10 +38,26 @@ static void calculation_task(void *pvParameter)
 {
     vTaskDelay(pdMS_TO_TICKS(2000)); // initial delay
 
+    // Heartbeat to the diagnostic log: the last 'hb' line before an unexpected
+    // power-off marks the instant the device died; the reset reason on the next
+    // boot tells us why. ~5 s cadence = every 50 iterations of this 100 ms loop.
+    int hb_count = 0;
+
     while (1)
     {
         calculate_threshold();
         street_message_tick();
+
+        if (++hb_count >= 50)
+        {
+            hb_count = 0;
+            diag_log_line("hb up=%llus heap=%u speed=%d limit=%d",
+                          esp_timer_get_time() / 1000000ULL,
+                          (unsigned)esp_get_free_heap_size(),
+                          (int)get_var_current_speed_value(),
+                          (int)get_var_speed_limit_value());
+        }
+
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
@@ -91,14 +110,25 @@ void app_main(void)
     esp_err_t err;
 
     waveshare_led_init();
+    // El splash (logo mykeego + anillo) ya quedo cargado dentro de waveshare_led_init().
+    splash_set_progress(15);
 
     buttons_init();
+    splash_set_progress(30);
 
     err = sd_card_init();
     if (err != ESP_OK)
         return;
+    splash_set_progress(55);
 
-    xTaskCreate(calculation_task, "calculation_task", 4096, NULL, 5, NULL);
+    // SD is mounted: start the diagnostic log (records the reset reason and any
+    // stored crash backtrace from the previous boot).
+    diag_log_init();
+    splash_set_progress(70);
+
+    // 6144 (was 4096): this task now also writes the heartbeat to the SD card,
+    // and FATFS/fopen paths are stack-hungry.
+    xTaskCreate(calculation_task, "calculation_task", 6144, NULL, 5, NULL);
     gps_queue = xQueueCreate(5, sizeof(gps_t));
 
     /* NMEA parser configuration */
@@ -108,6 +138,10 @@ void app_main(void)
     nmea_parser_handle_t nmea_hdl = nmea_parser_init(&config);
     /* register event handler for NMEA parser library */
     nmea_parser_add_handler(nmea_hdl, gps_event_handler, NULL);
+    splash_set_progress(90);
+
+    // Inicializacion completa: fundido del splash hacia la pantalla principal.
+    splash_finish();
 
     bool link_down_shown = false;
 
@@ -131,6 +165,10 @@ void app_main(void)
                 set_var_current_speed_value(0);
                 continue;
             }
+
+            // Anchor the diagnostic log to GPS wall-clock time (no RTC at boot).
+            diag_log_set_walltime(gps.date.year + YEAR_BASE, gps.date.month, gps.date.day,
+                                  gps.tim.hour + TIME_ZONE, gps.tim.minute, gps.tim.second);
 
             /* ---- 2. Sanitize speed (reject garbage like 300 km/h) ---- */
             float kmh = gps.speed * 3.6f; // m/s to km/h

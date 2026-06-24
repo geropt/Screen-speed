@@ -1,5 +1,13 @@
 CONFIG_FATFS_VFS_FSTAT_BLKSIZE=4096
 CONFIG_IDF_TARGET="esp32s3"
+
+# Core dump to flash: on a firmware crash (PANIC/WDT) the backtrace is saved to
+# the 'coredump' partition so diag_log can recover it to the SD card. Diagnostic
+# aid for the spontaneous power-off investigation.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_ENABLE=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y

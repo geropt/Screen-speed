@@ -20,6 +20,7 @@
 #include "lv_demos.h"
 #include "esp_lcd_sh8601.h"
 #include "ui/ui.h"
+#include "splash.h"
 
 
 const static char *TAG = "LCD_PORT";
@@ -357,6 +358,15 @@ esp_err_t waveshare_led_init()
         // Release the mutex
         lvgl_unlock();
     }
+
+#if RUN_APPLICATION_UI
+    // Carga el splash (logo mykeego + barra) encima de la pantalla Main, visible
+    // desde el primer frame mientras app_main inicializa el resto. splash_show()
+    // toma lvgl_lock() por su cuenta, por eso va FUERA del bloque de arriba (el
+    // mutex no es recursivo).
+    splash_show();
+#endif
+
     xTaskCreate(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL);
 
     return err;
