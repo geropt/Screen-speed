@@ -365,3 +365,38 @@ DONE:
     outStreet[maxStreetLen - 1] = 0;
     return true;
 }
+
+// --------------------------------------------------------
+//         LOOKAHEAD (heading-projected anticipation)
+// --------------------------------------------------------
+void project_point_ahead(float lat, float lon, float cog_deg, float dist_m,
+                         float *outLat, float *outLon)
+{
+    // Flat-earth offset over the short distances we look ahead (<=250 m): exact
+    // enough and far cheaper than a great-circle destination formula. NMEA cog
+    // is degrees clockwise from North, so North maps to +lat, East to +lon.
+    float cog_rad = cog_deg * (float)M_PI / 180.0f;
+    float dlat = (dist_m * cosf(cog_rad)) / EARTH_RADIUS;            // radians
+    float coslat = cosf(lat * (float)M_PI / 180.0f);
+    if (coslat < 1e-6f) coslat = 1e-6f;                             // guard near the poles
+    float dlon = (dist_m * sinf(cog_rad)) / (EARTH_RADIUS * coslat); // radians
+
+    *outLat = lat + dlat * 180.0f / (float)M_PI;
+    *outLon = lon + dlon * 180.0f / (float)M_PI;
+}
+
+bool get_speed_and_name_at_lookahead(float lat, float lon, float cog_deg, float horizon_m,
+                                     int *outSpeed, char *outStreet, int maxStreetLen,
+                                     float *outProjLat, float *outProjLon)
+{
+    float plat, plon;
+    project_point_ahead(lat, lon, cog_deg, horizon_m, &plat, &plon);
+
+    if (outProjLat) *outProjLat = plat;
+    if (outProjLon) *outProjLon = plon;
+
+    // Reuse the existing matcher (also scans neighbour tiles at boundaries, so a
+    // probe point that crosses a tile edge still resolves). Heap-safe: the
+    // scanner streams polyline points one at a time, no allocation.
+    return get_speed_and_name_at(plat, plon, outSpeed, outStreet, maxStreetLen);
+}

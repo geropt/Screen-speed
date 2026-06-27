@@ -1,5 +1,8 @@
 # Name,      Type, SubType, Offset,     Size
+# factory grew 0x2EE000 -> 0x400000 (4MB): linking the WiFi stack (wifi/lwip/
+# mbedtls/esp_http_server) for the OTA-tiles WiFi layer pushed the app past the
+# old 0x2EE000. Flash is 8MB so there is plenty of room; layout stays single-app.
 nvs,         data, nvs,     0x9000,      0x6000
 phy_init,    data, phy,     0xF000,      0x1000
-factory,     app,  factory, 0x10000,     0x2EE000
+factory,     app,  factory, 0x10000,     0x400000
 coredump,    data, coredump,,            0x40000

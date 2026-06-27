@@ -300,6 +300,13 @@ esp_err_t waveshare_led_init()
     lv_init();
     // alloc draw buffers used by LVGL
     // it's recommended to choose the size of the draw buffer(s) to be at least 1/10 screen sized
+    // Draw buffers en RAM interna DMA (NO en PSRAM). El flush (lvgl_flush_cb ->
+    // esp_lcd_panel_draw_bitmap) es DMA asincrono; si el buffer estuviera en
+    // PSRAM, cualquier escritura a flash (esp_wifi_deinit, NVS) deshabilita la
+    // cache y el DMA desde PSRAM falla ('spi transmit color failed') colgando
+    // LVGL. La RAM interna es accesible aunque la cache este off. PSRAM sigue
+    // habilitada (libera interna moviendo .bss/rodata afuera) y LVGL_BUF_HEIGHT
+    // se redujo a V_RES/8 para que los dos buffers entren junto al stack WiFi.
     lv_color_t *buf1 = static_cast<lv_color_t *>(heap_caps_malloc(LCD_H_RES * LVGL_BUF_HEIGHT * sizeof(lv_color_t), MALLOC_CAP_DMA));
     assert(buf1);
     lv_color_t *buf2 = static_cast<lv_color_t *>(heap_caps_malloc(LCD_H_RES * LVGL_BUF_HEIGHT * sizeof(lv_color_t), MALLOC_CAP_DMA));

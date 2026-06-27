@@ -11,14 +11,32 @@
 #define BUTTON_POLL_MS          20
 // Number of consecutive stable polls required to accept a level change.
 #define BUTTON_DEBOUNCE_SAMPLES 3
+// Hold the BOOT button this long to request WiFi provisioning (long-press).
+#define BUTTON_LONGPRESS_MS     3000
+#define BUTTON_LONGPRESS_SAMPLES (BUTTON_LONGPRESS_MS / BUTTON_POLL_MS)
 
 static const char *TAG = "BUTTONS";
+
+// Set by the button task on a long-press, consumed by the main loop. volatile:
+// written here, read/cleared from app_main's loop.
+static volatile bool s_prov_requested = false;
+
+bool buttons_take_provisioning_request(void)
+{
+    if (s_prov_requested) {
+        s_prov_requested = false;
+        return true;
+    }
+    return false;
+}
 
 static void button_task(void *pvParameter)
 {
     int stable_level = 1;   // released
     int last_raw = 1;
     int stable_count = 0;
+    int held_samples = 0;       // polls the button has been stably pressed
+    bool long_fired = false;    // long-press already signalled this press
 
     while (1)
     {
@@ -42,7 +60,29 @@ static void button_task(void *pvParameter)
             if (stable_level == 0)   // falling edge -> pressed
             {
                 ESP_LOGI(TAG, "BOOT button pressed");
-                show_temp_message("Boton OK!", 2000);
+                held_samples = 0;
+                long_fired = false;
+            }
+            else                     // rising edge -> released
+            {
+                // Short press: keep the previous feedback. Long press already
+                // gave its own feedback and request, so don't double-handle.
+                if (!long_fired)
+                    show_temp_message("Boton OK!", 2000);
+            }
+        }
+
+        // While stably held, count toward the long-press threshold.
+        if (stable_level == 0)
+        {
+            if (held_samples < BUTTON_LONGPRESS_SAMPLES)
+                held_samples++;
+            if (!long_fired && held_samples >= BUTTON_LONGPRESS_SAMPLES)
+            {
+                long_fired = true;
+                s_prov_requested = true;
+                ESP_LOGI(TAG, "BOOT long-press -> WiFi provisioning requested");
+                show_temp_message("Configurar WiFi...", 2500);
             }
         }
 

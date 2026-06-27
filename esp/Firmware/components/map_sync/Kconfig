@@ -1,0 +1,30 @@
+menu "map_sync (Capa B — tiles por zona)"
+
+    config MAP_SYNC_TEST_CERT
+        bool "Usar cert self-signed embebido (servidor de prueba)"
+        default n
+        help
+            Si esta activo, map_sync verifica TLS contra el certificado embebido
+            en components/map_sync/test_server_cert.pem (generarlo con
+            `python map_test_server.py --print-cert > components/map_sync/test_server_cert.pem`).
+            Si esta apagado, usa el certificate bundle de mbedTLS (produccion).
+            La verificacion TLS esta SIEMPRE activa en ambos casos.
+
+    config MAP_SYNC_BOOT_SELFTEST
+        bool "Selftest de catalogo en el boot"
+        default n
+        help
+            Si esta activo, app_main llama map_sync_selftest() en el boot: conecta
+            WiFi STA, baja <base_url>/catalog.json, loguea las zonas y desconecta.
+            Solo para validar el camino HTTPS+parseo del Incremento 2. Apagar en prod.
+
+    config MAP_SYNC_VERIFY_SHA
+        bool "Verificar sha256 de tiles locales ya presentes"
+        default n
+        help
+            Si esta activo, antes de decidir bajar un tile que ya existe con el size
+            correcto, se calcula su sha256 y se compara contra el manifiesto (mas
+            I/O de SD). Por defecto solo se compara size + se verifica el sha256 del
+            tile recien descargado. (Usado en el Incremento 5.)
+
+endmenu

@@ -26,6 +26,21 @@ extern "C" {
 
 bool get_speed_and_name_at(float lat, float lon, int *outSpeed, char *outStreet, int maxStreetLen);
 
+// Project a point `dist_m` meters ahead of (lat,lon) along course `cog_deg`
+// (NMEA course over ground: 0 = North, 90 = East, increasing clockwise).
+// Outputs the projected coordinates in degrees. Pure helper (no I/O).
+void project_point_ahead(float lat, float lon, float cog_deg, float dist_m,
+                         float *outLat, float *outLon);
+
+// Heading-projected lookahead: project a probe point `horizon_m` ahead along
+// `cog_deg` and return the street + speed limit there, reusing
+// get_speed_and_name_at() (so it still scans neighbour tiles at boundaries).
+// outProjLat/outProjLon (may be NULL) receive the probe point for diagnostics.
+// Returns true if a named street was matched at the projected point.
+bool get_speed_and_name_at_lookahead(float lat, float lon, float cog_deg, float horizon_m,
+                                     int *outSpeed, char *outStreet, int maxStreetLen,
+                                     float *outProjLat, float *outProjLon);
+
 #ifdef __cplusplus
 }
 #endif

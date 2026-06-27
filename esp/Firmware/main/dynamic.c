@@ -53,6 +53,90 @@ void street_message_tick(void)
     }
 }
 
+// --- Anticipation (Stage 1) shared state ---------------------------------
+// Written by the GPS loop, read by the UI/warning logic. Guarded by the LVGL
+// mutex (reused here as a cheap, already-available lock) so the multi-field
+// struct is never read half-updated.
+static lookahead_t s_lookahead = { .valid = false };
+
+void set_lookahead(const lookahead_t *la)
+{
+    if (lvgl_lock(-1))
+    {
+        s_lookahead = *la;
+        s_lookahead.valid = true;
+        lvgl_unlock();
+    }
+}
+
+void clear_lookahead(void)
+{
+    if (lvgl_lock(-1))
+    {
+        s_lookahead.valid = false;
+        lvgl_unlock();
+    }
+}
+
+bool get_lookahead(lookahead_t *out)
+{
+    bool valid = false;
+    if (lvgl_lock(-1))
+    {
+        *out = s_lookahead;
+        valid = s_lookahead.valid;
+        lvgl_unlock();
+    }
+    return valid;
+}
+
+// --- Anticipation (Stage 2): lower-limit-ahead pre-warning ---------------
+// How much the upcoming limit must drop (km/h) before we bother warning, so a
+// 50->48 rounding artifact never fires.
+#define LOOKAHEAD_LIMIT_DROP_MIN   10
+// Minimum on-screen time for the pre-warning, ms.
+#define LOOKAHEAD_WARN_MS          3000
+
+void lookahead_warning_tick(void)
+{
+    // Edge-triggered: remember the limit we last warned about so we announce a
+    // given drop only once per approach, not on every 100 ms tick.
+    static int warned_limit = 0;
+
+    lookahead_t la;
+    if (!get_lookahead(&la) || la.speed_limit <= 0)
+    {
+        // No usable prediction (stopped / nothing matched ahead): rearm.
+        warned_limit = 0;
+        return;
+    }
+
+    int cur_limit = get_var_speed_limit_value();
+
+    // Fire only when the road ahead is meaningfully slower than the current one.
+    bool dropping = (cur_limit > 0) &&
+                    (la.speed_limit < cur_limit - LOOKAHEAD_LIMIT_DROP_MIN);
+
+    if (dropping)
+    {
+        // New (or further-reduced) limit ahead -> announce once.
+        if (la.speed_limit != warned_limit)
+        {
+            warned_limit = la.speed_limit;
+            char msg[48];
+            snprintf(msg, sizeof(msg), "Limite %d en %dm",
+                     la.speed_limit, la.distance_m);
+            show_temp_message(msg, LOOKAHEAD_WARN_MS);
+        }
+    }
+    else
+    {
+        // Once the current limit has caught up to (or matches) the prediction,
+        // the approach is over: rearm for the next drop.
+        warned_limit = 0;
+    }
+}
+
 void calculate_threshold(void)
 {
     int limit = get_var_speed_limit_value();

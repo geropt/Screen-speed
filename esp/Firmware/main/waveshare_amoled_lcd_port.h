@@ -54,7 +54,10 @@
 #endif
 
 
-#define LVGL_BUF_HEIGHT         (LCD_V_RES / 4)
+// V_RES/8 (era /4): dos draw buffers de este alto en RAM interna DMA deben
+// entrar junto al stack WiFi. En interna (no PSRAM) el flush por DMA es inmune
+// al cache-disable de las escrituras a flash (ver waveshare_led_init()).
+#define LVGL_BUF_HEIGHT         (LCD_V_RES / 8)
 #define LVGL_TICK_PERIOD_MS     2
 #define LVGL_TASK_MAX_DELAY_MS  500
 #define LVGL_TASK_MIN_DELAY_MS  1
