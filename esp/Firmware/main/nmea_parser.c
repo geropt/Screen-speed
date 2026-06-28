@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nmea_parser.h"
+#include "ruptela_binary.h"
 
 /**
  * @brief NMEA Parser runtime buffer size
@@ -559,71 +560,115 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
     return ESP_OK;
 }
 
-/**
- * @brief Handle when a pattern has been detected by uart
- *
- * @param esp_gps esp_gps_t type object
- */
-static void esp_handle_uart_pattern(esp_gps_t *esp_gps)
+// Raw-byte UART reader state machine.
+// Accumulates NMEA lines (starting '$', ending '\n') and Ruptela binary frames
+// (starting 0x00) from the same RS232 stream without relying on pattern detection,
+// which would corrupt binary payloads containing 0x0A bytes.
+
+#define NMEA_BUF_SIZE  256
+#define BIN_BUF_SIZE   512
+
+typedef enum {
+    FRAME_IDLE,     // waiting for first byte of a new frame
+    FRAME_NMEA,     // accumulating a '$'-terminated NMEA sentence
+    FRAME_BINARY,   // accumulating a Ruptela binary record
+} frame_state_t;
+
+static void raw_feed_byte(esp_gps_t *esp_gps,
+                          uint8_t byte,
+                          frame_state_t *state,
+                          uint8_t *nmea_buf, int *nmea_pos,
+                          uint8_t *bin_buf,  int *bin_pos,
+                          int *bin_expected)
 {
-    int pos = uart_pattern_pop_pos(esp_gps->uart_port);
-    if (pos != -1) {
-        /* read one line(include '\n') */
-        int read_len = uart_read_bytes(esp_gps->uart_port, esp_gps->buffer, pos + 1, 100 / portTICK_PERIOD_MS);
-        /* make sure the line is a standard string */
-        esp_gps->buffer[read_len] = '\0';
-        /* Send new line to handle */
-        if (gps_decode(esp_gps, read_len + 1) != ESP_OK) {
-            ESP_LOGW(GPS_TAG, "GPS decode line failed");
+    if (*state == FRAME_IDLE) {
+        if (byte == '$') {
+            *state = FRAME_NMEA;
+            *nmea_pos = 0;
+            nmea_buf[(*nmea_pos)++] = byte;
+        } else if (byte == 0x00) {
+            *state = FRAME_BINARY;
+            *bin_pos = 0;
+            bin_buf[(*bin_pos)++] = byte;
+            *bin_expected = 0; // will determine length once we have 4 bytes
         }
-    } else {
-        ESP_LOGW(GPS_TAG, "Pattern Queue Size too small");
-        uart_flush_input(esp_gps->uart_port);
+        // any other byte in IDLE is inter-frame garbage, discard
+        return;
+    }
+
+    if (*state == FRAME_NMEA) {
+        if (*nmea_pos < NMEA_BUF_SIZE - 1) {
+            nmea_buf[(*nmea_pos)++] = byte;
+        }
+        if (byte == '\n') {
+            nmea_buf[*nmea_pos] = '\0';
+            // gps_decode reads from esp_gps->buffer, so copy the NMEA line there
+            size_t copy_len = (*nmea_pos < NMEA_PARSER_RUNTIME_BUFFER_SIZE - 1)
+                              ? (size_t)*nmea_pos : (size_t)(NMEA_PARSER_RUNTIME_BUFFER_SIZE - 1);
+            memcpy(esp_gps->buffer, nmea_buf, copy_len + 1);
+            if (gps_decode(esp_gps, copy_len + 1) != ESP_OK) {
+                ESP_LOGD(GPS_TAG, "GPS decode failed");
+            }
+            *state = FRAME_IDLE;
+        }
+        return;
+    }
+
+    // FRAME_BINARY
+    if (*bin_pos < BIN_BUF_SIZE) {
+        bin_buf[(*bin_pos)++] = byte;
+    }
+
+    // Once we have the 4-byte preamble, determine total frame length:
+    // [0x00][0x00][DataLength:2B BE] + DataLength bytes + 2B CRC
+    if (*bin_expected == 0 && *bin_pos == 4) {
+        uint16_t data_len = ((uint16_t)bin_buf[2] << 8) | bin_buf[3];
+        *bin_expected = 4 + data_len + 2; // preamble + payload + CRC
+        if (*bin_expected > BIN_BUF_SIZE) {
+            ESP_LOGW(GPS_TAG, "binary frame too large (%d), discarding", *bin_expected);
+            *state = FRAME_IDLE;
+            return;
+        }
+    }
+
+    if (*bin_expected > 0 && *bin_pos >= *bin_expected) {
+        // Full frame received — log first 48 bytes for format verification
+        ESP_LOG_BUFFER_HEX("RUPT_RAW", bin_buf,
+                           (*bin_pos < 48) ? *bin_pos : 48);
+        ruptela_record_parse(bin_buf, *bin_pos);
+        *state = FRAME_IDLE;
     }
 }
 
 /**
  * @brief NMEA Parser Task Entry
  *
- * @param arg argument
+ * Reads the RS232 stream byte-by-byte using a dual-frame state machine so that
+ * NMEA sentences and Ruptela binary records can coexist on the same UART without
+ * pattern-detection cutting binary payloads that contain 0x0A bytes.
  */
 static void nmea_parser_task_entry(void *arg)
 {
     esp_gps_t *esp_gps = (esp_gps_t *)arg;
-    uart_event_t event;
+
+    static uint8_t nmea_buf[NMEA_BUF_SIZE];
+    static uint8_t bin_buf[BIN_BUF_SIZE];
+    static uint8_t chunk[128];
+
+    frame_state_t state    = FRAME_IDLE;
+    int nmea_pos           = 0;
+    int bin_pos            = 0;
+    int bin_expected       = 0;
+
     while (1) {
-        if (xQueueReceive(esp_gps->event_queue, &event, pdMS_TO_TICKS(200))) {
-            switch (event.type) {
-            case UART_DATA:
-                break;
-            case UART_FIFO_OVF:
-                ESP_LOGW(GPS_TAG, "HW FIFO Overflow");
-                uart_flush(esp_gps->uart_port);
-                xQueueReset(esp_gps->event_queue);
-                break;
-            case UART_BUFFER_FULL:
-                ESP_LOGW(GPS_TAG, "Ring Buffer Full");
-                uart_flush(esp_gps->uart_port);
-                xQueueReset(esp_gps->event_queue);
-                break;
-            case UART_BREAK:
-                ESP_LOGW(GPS_TAG, "Rx Break");
-                break;
-            case UART_PARITY_ERR:
-                ESP_LOGE(GPS_TAG, "Parity Error");
-                break;
-            case UART_FRAME_ERR:
-                ESP_LOGE(GPS_TAG, "Frame Error");
-                break;
-            case UART_PATTERN_DET:
-                esp_handle_uart_pattern(esp_gps);
-                break;
-            default:
-                ESP_LOGW(GPS_TAG, "unknown uart event type: %d", event.type);
-                break;
-            }
+        int n = uart_read_bytes(esp_gps->uart_port, chunk, sizeof(chunk),
+                                pdMS_TO_TICKS(20));
+        for (int i = 0; i < n; i++) {
+            raw_feed_byte(esp_gps, chunk[i],
+                          &state,
+                          nmea_buf, &nmea_pos,
+                          bin_buf,  &bin_pos, &bin_expected);
         }
-        /* Drive the event loop */
         esp_event_loop_run(esp_gps->event_loop_hdl, pdMS_TO_TICKS(50));
     }
     vTaskDelete(NULL);
@@ -691,10 +736,6 @@ nmea_parser_handle_t nmea_parser_init(const nmea_parser_config_t *config)
         ESP_LOGE(GPS_TAG, "config uart gpio failed");
         goto err_uart_config;
     }
-    /* Set pattern interrupt, used to detect the end of a line */
-    uart_enable_pattern_det_baud_intr(esp_gps->uart_port, '\n', 1, 9, 0, 0);
-    /* Set pattern queue size */
-    uart_pattern_queue_reset(esp_gps->uart_port, config->uart.event_queue_size);
     uart_flush(esp_gps->uart_port);
     /* Create Event loop */
     esp_event_loop_args_t loop_args = {

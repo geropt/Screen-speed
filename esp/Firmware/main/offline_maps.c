@@ -11,6 +11,7 @@
 #include "buttons.h"
 #include "diag_log.h"
 #include "splash.h"
+#include "vehicle_io.h"
 #include <math.h>
 #include <string.h>
 
@@ -51,11 +52,13 @@ static void calculation_task(void *pvParameter)
         if (++hb_count >= 50)
         {
             hb_count = 0;
-            diag_log_line("hb up=%llus heap=%u speed=%d limit=%d",
+            diag_log_line("hb up=%llus heap=%u speed=%d limit=%d ign=%d rpm=%d",
                           esp_timer_get_time() / 1000000ULL,
                           (unsigned)esp_get_free_heap_size(),
                           (int)get_var_current_speed_value(),
-                          (int)get_var_speed_limit_value());
+                          (int)get_var_speed_limit_value(),
+                          (int)get_io_ignition(),
+                          (int)get_io_rpm());
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
