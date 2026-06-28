@@ -1,0 +1,8 @@
+{
+  "_comment": "Zonas de mapas. bbox = [min_lat, min_lon, max_lat, max_lon] en grados. Un tile se asigna a una zona si su centro cae dentro del bbox (puede pertenecer a varias).",
+  "zones": [
+    { "id": "caba_oeste",  "name": "CABA Oeste",  "bbox": [-34.520, -58.570, -34.450, -58.540] },
+    { "id": "caba_centro", "name": "CABA Centro", "bbox": [-34.520, -58.540, -34.450, -58.511] },
+    { "id": "caba_este",   "name": "CABA Este",   "bbox": [-34.520, -58.511, -34.450, -58.480] }
+  ]
+}

@@ -93,6 +93,13 @@ class TileWriter:
             f.write(f"#define FILENAME_SCALE {FILENAME_SCALE}\n")
             print(f"Wrote {config_file}")
 
+        # ---- catalogo de zonas + manifiestos (Capa B) ----
+        try:
+            from make_catalog import emit_catalog
+            emit_catalog(tiles_dir=OUT_DIR.rstrip("/"))
+        except Exception as e:
+            print(f"WARN: no se pudo generar el catalogo de zonas: {e}")
+
 
 # -------- OSM Handler --------
 class RoadHandler(osmium.SimpleHandler):

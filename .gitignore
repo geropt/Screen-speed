@@ -20,3 +20,10 @@ dependencies.lock
 # Generated caches and map tiles (any depth)
 **/.cache/
 **/tiles/
+
+# Test server TLS material (never commit private keys)
+python/server.key
+python/server.crt
+
+# Cert real embebido del test server (el placeholder commiteado se sobrescribe localmente)
+esp/Firmware/components/map_sync/test_server_cert.pem
