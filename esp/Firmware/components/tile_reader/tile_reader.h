@@ -24,7 +24,10 @@
 extern "C" {
 #endif
 
-bool get_speed_and_name_at(float lat, float lon, int *outSpeed, char *outStreet, int maxStreetLen);
+// heading_deg: vehicle course over ground (0-360°). Pass -1.0f when stopped or
+// heading is unreliable; heading-based segment scoring is skipped in that case.
+bool get_speed_and_name_at(float lat, float lon, float heading_deg,
+                           int *outSpeed, char *outStreet, int maxStreetLen);
 
 #ifdef __cplusplus
 }

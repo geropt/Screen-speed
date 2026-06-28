@@ -86,6 +86,22 @@ static float haversine(float lat1, float lon1, float lat2, float lon2)
 //     return dx*dx + dy*dy;
 // }
 
+// Heading penalty weight. A perpendicular segment (sin²=1) costs (1+K)× more
+// than a parallel one. K=2.5 means a perpendicular street must be 3.5× closer
+// to win over the street the vehicle is traveling along.
+#define HEADING_PENALTY_K  2.5f
+
+// Flat-earth bearing from A to B, degrees 0-360. Accurate enough for the short
+// polyline edges (tens of meters) found in OSM tile data.
+static float segment_bearing(float alat, float alon, float blat, float blon)
+{
+    float dy = blat - alat;
+    float dx = (blon - alon) * cosf(alat * (float)M_PI / 180.0f);
+    float angle = atan2f(dx, dy) * 180.0f / (float)M_PI;
+    if (angle < 0.0f) angle += 360.0f;
+    return angle;
+}
+
 /**
  * Accurate distance from a point P to segment AB using:
  * 1. Euclidean projection (fast)
@@ -125,6 +141,7 @@ static float distance_point_to_segment_haversine(float plat, float plon,
 //         MAIN FUNCTION (called by the rest of app)
 // --------------------------------------------------------
 bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
+                         float heading_deg,
                          float *outBestDist, int *outBestSpeed,
                          char *outBestName, size_t bestNameSize,
                          bool *outTileHasData)
@@ -189,8 +206,16 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             if (p > 0) {
                 float d = distance_point_to_segment_haversine(
                             lat, lon, prevLat, prevLon, curLat, curLon);
-                if (d < segBestDist)
-                    segBestDist = d;
+                float score = d;
+                if (heading_deg >= 0.0f) {
+                    float bear = segment_bearing(prevLat, prevLon, curLat, curLon);
+                    float diff = fabsf(heading_deg - bear);
+                    if (diff > 180.0f) diff = 360.0f - diff;
+                    float s = sinf(diff * (float)M_PI / 180.0f);
+                    score = d * (1.0f + HEADING_PENALTY_K * s * s);
+                }
+                if (score < segBestDist)
+                    segBestDist = score;
             }
             prevLat = curLat;
             prevLon = curLon;
@@ -245,8 +270,8 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
     return true;
 }
 
-bool get_speed_and_name_at(float lat, float lon, int *outSpeed,
-                           char *outStreet, int maxStreetLen)
+bool get_speed_and_name_at(float lat, float lon, float heading_deg,
+                           int *outSpeed, char *outStreet, int maxStreetLen)
 {
     if((lat == 0) && (lon == 0))
         return false;
@@ -285,7 +310,7 @@ bool get_speed_and_name_at(float lat, float lon, int *outSpeed,
         char  tileBestName[128];
         bool  tileHasData = false;
 
-        if (scan_tile_for_match(base_origin_lat, base_origin_lon, lat, lon,
+        if (scan_tile_for_match(base_origin_lat, base_origin_lon, lat, lon, heading_deg,
                                 &tileBestDist, &tileBestSpeed, tileBestName, sizeof(tileBestName),
                                 &tileHasData))
         {
@@ -333,7 +358,7 @@ bool get_speed_and_name_at(float lat, float lon, int *outSpeed,
         char  tileBestName[128];
         bool  tileHasData = false;
 
-        if (!scan_tile_for_match(ntx, nty, lat, lon,
+        if (!scan_tile_for_match(ntx, nty, lat, lon, heading_deg,
                                  &tileBestDist, &tileBestSpeed,
                                  tileBestName, sizeof(tileBestName),
                                  &tileHasData))

@@ -187,9 +187,13 @@ void app_main(void)
             }
 
             /* ---- 3. Map-match street + speed limit ---- */
+            // Use heading to prefer segments aligned with the vehicle's direction,
+            // avoiding false matches on cross-streets at intersections.
+            float heading = (kmh > 5.0f) ? gps.cog : -1.0f;
+
             static int speed_limit;
             static char street[128];
-            if (get_speed_and_name_at(gps.latitude, gps.longitude, &speed_limit, street, sizeof(street)))
+            if (get_speed_and_name_at(gps.latitude, gps.longitude, heading, &speed_limit, street, sizeof(street)))
             {
                 ESP_LOGI(TAG, "Speed limit: %d km/h", speed_limit);
                 ESP_LOGI(TAG, "Street: %s", street);
