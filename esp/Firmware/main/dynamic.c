@@ -16,6 +16,38 @@ static char last_street[128] = "";
 // 0 means "no message active".
 static volatile int64_t msg_until_us = 0;
 
+// Full-circle (360°) red ring drawn over the main screen edge. It is hidden
+// (transparent) while under the speed limit and pulses red while over it. Created
+// in our own code instead of EEZ's screens.c so a UI regeneration won't clobber it.
+static lv_obj_t *s_overspeed_ring = NULL;
+
+void overspeed_ring_init(void)
+{
+    if (lvgl_lock(-1))
+    {
+        lv_obj_t *r = lv_arc_create(objects.main);
+        lv_obj_set_pos(r, 13, 13);
+        lv_obj_set_size(r, 440, 440);          // same radius as the EEZ speed arcs
+        lv_arc_set_bg_angles(r, 0, 360);       // full circle
+        lv_arc_set_rotation(r, 0);
+        lv_obj_remove_style(r, NULL, LV_PART_KNOB);       // no draggable knob
+        lv_obj_clear_flag(r, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_color(r, lv_color_hex(0xc1140d), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(r, 20, LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(r, LV_OPA_TRANSP, LV_PART_MAIN);       // starts hidden
+        lv_obj_set_style_arc_opa(r, LV_OPA_TRANSP, LV_PART_INDICATOR);  // indicator unused
+        s_overspeed_ring = r;
+
+        // The legacy EEZ speed arcs are unused now (replaced by this ring). Even at
+        // value 0 they leave a ~1px red sliver where they meet at the top (270°), so
+        // hide them outright instead of relying on the empty value.
+        lv_obj_add_flag(objects.obj0__arc_indicator_left, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(objects.obj0__arc_indicator_right, LV_OBJ_FLAG_HIDDEN);
+
+        lvgl_unlock();
+    }
+}
+
 static void write_street_label(const char *text)
 {
     // lv_* APIs are not thread-safe: this runs outside the LVGL task,
@@ -58,62 +90,41 @@ void calculate_threshold(void)
     int limit = get_var_speed_limit_value();
     int cur_speed = get_var_current_speed_value();
 
-    // Guard against division by zero (untagged roads export speed_limit == 0).
-    if (limit <= 0)
-    {
-        set_var_indicator_threshold_value((int)LIMIT_INDICATOR_MIN_VAL);
-        if (lvgl_lock(-1))
-        {
-            lv_obj_add_flag(objects.speed_limit_warning_label, LV_OBJ_FLAG_HIDDEN);
-            lvgl_unlock();
-        }
-        return;
-    }
+    // The EEZ-generated speed arcs are no longer used as a gradual gauge: keep
+    // them empty (value 0) so they draw nothing. The overspeed feedback is the
+    // full-circle ring below instead.
+    set_var_indicator_threshold_value(0);
 
-    float ratio = (float)cur_speed / (float)limit;
-    float thresh;
-
-    if ((ratio < 1.0f))
-    {
-        // Exponential growth
-        float k = 3.0f;         // tuning factor for curve steepness
-        thresh = LIMIT_INDICATOR_MIN_VAL + LIMIT_INDICATOR_LIMIT_VAL * powf(ratio, k);
-    }
-    else
-    {
-        // Time-based oscillation for ratio >= 1
-        // Get a time variable in seconds
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        float t = (float)ts.tv_sec + (float)ts.tv_nsec / 1e9f; // current time in seconds
-
-        // Oscillate between min and max
-        float osc_min = LIMIT_INDICATOR_LIMIT_VAL;
-        float osc_max = LIMIT_INDICATOR_MAX_VAL;
-        float period = 0.5f; // period in seconds for one full oscillation
-
-        // sine oscillation normalized to [0,1]
-        float sine_val = 0.4f * (1.0f + sinf(2.0f * 3.14159265f * t / period));
-        thresh = osc_min + sine_val * (osc_max - osc_min);
-
-        if (thresh > LIMIT_INDICATOR_MAX_VAL)
-        {
-            thresh = LIMIT_INDICATOR_MAX_VAL;
-        }
-    }
-
-    set_var_indicator_threshold_value((int)thresh);
-
-    // Over-speed visual warning. Hysteresis prevents flicker at the boundary:
-    // turn ON above limit, turn OFF only once a couple km/h below it.
+    // Over-speed state with hysteresis to prevent flicker at the boundary:
+    // turn ON above the limit, turn OFF only once a couple km/h below it. An
+    // unknown limit (untagged road, limit <= 0) never triggers the warning.
     static bool warning_on = false;
-    if (!warning_on && cur_speed > limit)
+    if (limit <= 0)
+        warning_on = false;
+    else if (!warning_on && cur_speed > limit)
         warning_on = true;
     else if (warning_on && cur_speed <= limit - 2)
         warning_on = false;
 
+    // Pulsing opacity for the red ring while over the limit (sine, ~0.6 s period).
+    lv_opa_t ring_opa = LV_OPA_TRANSP;
+    if (warning_on)
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        float t = (float)ts.tv_sec + (float)ts.tv_nsec / 1e9f;
+        float period = 0.6f;
+        // sine normalized to [0,1], then mapped to [LV_OPA_40 .. LV_OPA_COVER]
+        float s = 0.5f * (1.0f + sinf(2.0f * 3.14159265f * t / period));
+        int opa = (int)(LV_OPA_40 + s * (LV_OPA_COVER - LV_OPA_40));
+        ring_opa = (lv_opa_t)opa;
+    }
+
     if (lvgl_lock(-1))
     {
+        if (s_overspeed_ring)
+            lv_obj_set_style_arc_opa(s_overspeed_ring, ring_opa, LV_PART_MAIN);
+
         if (warning_on)
             lv_obj_clear_flag(objects.speed_limit_warning_label, LV_OBJ_FLAG_HIDDEN);
         else

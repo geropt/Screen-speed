@@ -12,6 +12,96 @@ CONFIG_FILE_PATH = "../esp/Firmware/components/tile_reader/tile_config.h"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
+# -----------------------------
+# DEFAULT SPEED LIMITS (km/h)
+# -----------------------------
+# When a way has no "maxspeed" tag we fall back to a sensible default
+# based on the OSM highway type. Values follow the Argentine traffic law
+# (Ley Nacional de Tránsito 24.449) for the Buenos Aires metro area:
+#   - calles / residencial: 40
+#   - avenidas (primary/secondary): 60
+#   - semiautopistas: 100/120
+#   - autopistas: 130
+#   - calles de convivencia (living_street): 20
+DEFAULT_SPEEDS = {
+    "motorway":        130,
+    "motorway_link":    80,
+    "trunk":           120,
+    "trunk_link":       60,
+    "primary":          60,
+    "primary_link":     40,
+    "secondary":        60,
+    "secondary_link":   40,
+    "tertiary":         50,
+    "tertiary_link":    40,
+    "unclassified":     40,
+    "residential":      40,
+    "living_street":    20,
+    "service":          20,
+    "road":             40,
+    "pedestrian":       10,
+    "track":            20,
+    "busway":           40,
+    "bus_guideway":     40,
+}
+# Generic fallback when the highway type is unknown / not listed above.
+DEFAULT_SPEED_FALLBACK = 40
+
+
+# -----------------------------
+# DRIVABLE ROAD TYPES
+# -----------------------------
+# Only roads a vehicle can actually drive on are written to the tiles.
+# Pedestrian/cycle-only ways (footway, steps, path, cycleway, etc.) are
+# skipped: they are not relevant to a speed monitor and would pollute the
+# map-matching with bad candidates.
+DRIVABLE_HIGHWAYS = {
+    "motorway", "motorway_link",
+    "trunk", "trunk_link",
+    "primary", "primary_link",
+    "secondary", "secondary_link",
+    "tertiary", "tertiary_link",
+    "unclassified", "residential", "living_street",
+    "service", "road", "busway", "bus_guideway", "track",
+}
+
+# Human-readable placeholder name (Spanish) used when a drivable way has no
+# usable name tag. The firmware skips segments with an empty name, so giving
+# them a label makes the road matchable and still shows something sensible.
+PLACEHOLDER_NAMES = {
+    "motorway":        "Autopista",
+    "motorway_link":   "Acceso autopista",
+    "trunk":           "Semiautopista",
+    "trunk_link":      "Acceso",
+    "primary":         "Avenida",
+    "primary_link":    "Acceso",
+    "secondary":       "Avenida",
+    "secondary_link":  "Acceso",
+    "tertiary":        "Calle",
+    "tertiary_link":   "Acceso",
+    "unclassified":    "Calle",
+    "residential":     "Calle",
+    "living_street":   "Calle",
+    "service":         "Calle de servicio",
+    "road":            "Calle",
+    "busway":          "Carril bus",
+    "bus_guideway":    "Carril bus",
+    "track":           "Camino",
+}
+PLACEHOLDER_FALLBACK = "Calle"
+
+
+def resolve_name(tags, highway):
+    """Pick the best available name for a way, with sensible fallbacks."""
+    for key in ("name", "name:es", "official_name", "ref", "alt_name", "loc_name"):
+        val = tags.get(key)
+        if val:
+            return val
+    # No real name: use a readable placeholder based on the road class so
+    # the segment is still matchable by the firmware.
+    return PLACEHOLDER_NAMES.get(highway, PLACEHOLDER_FALLBACK)
+
+
 # -------- Compute tile index --------
 # always use floor to ensure proper tile generation
 TILE_SIZE_E7 = int(round(TILE_SIZE * 1e7))
@@ -103,7 +193,13 @@ class RoadHandler(osmium.SimpleHandler):
     def way(self, w):
         if "highway" not in w.tags:
             return
-        
+
+        highway = w.tags.get("highway")
+
+        # -------- keep only drivable roads --------
+        if highway not in DRIVABLE_HIGHWAYS:
+            return
+
         # -------- speed limit --------
         speed_raw = w.tags.get("maxspeed", "0")
         try:
@@ -114,8 +210,15 @@ class RoadHandler(osmium.SimpleHandler):
         except:
             speed = 0
 
-        # -------- street name --------
-        street_name = w.tags.get("name")
+        # -------- fill missing speed from highway type --------
+        # Many OSM ways (specially in Argentina) have no "maxspeed" tag.
+        # Assign a default based on the road class so the firmware always
+        # has a usable speed limit instead of 0.
+        if speed <= 0:
+            speed = DEFAULT_SPEEDS.get(highway, DEFAULT_SPEED_FALLBACK)
+
+        # -------- street name (with fallbacks + placeholder) --------
+        street_name = resolve_name(w.tags, highway)
 
         # -------- coordinates --------
         coords = [(n.lat, n.lon) for n in w.nodes]

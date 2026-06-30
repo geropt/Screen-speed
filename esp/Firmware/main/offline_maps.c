@@ -12,6 +12,7 @@
 #include "diag_log.h"
 #include "splash.h"
 #include "vehicle_io.h"
+#include "pmu_monitor.h"
 #include <math.h>
 #include <string.h>
 
@@ -52,13 +53,23 @@ static void calculation_task(void *pvParameter)
         if (++hb_count >= 50)
         {
             hb_count = 0;
-            diag_log_line("hb up=%llus heap=%u speed=%d limit=%d ign=%d rpm=%d",
+
+            // PMU telemetry: the last values before a power-off pinpoint the cause.
+            // vbus dropping => supply lost; die_c climbing => PMU over-temp cut.
+            pmu_telemetry_t pmu;
+            pmu_monitor_read(&pmu);
+
+            diag_log_line("hb up=%llus heap=%u speed=%d limit=%d ign=%d rpm=%d "
+                          "pmu=%d vbus=%d vsys=%d vbat=%d die=%dC st1=%02x st2=%02x irq=%02x%02x%02x",
                           esp_timer_get_time() / 1000000ULL,
                           (unsigned)esp_get_free_heap_size(),
                           (int)get_var_current_speed_value(),
                           (int)get_var_speed_limit_value(),
                           (int)get_io_ignition(),
-                          (int)get_io_rpm());
+                          (int)get_io_rpm(),
+                          pmu.ok, pmu.vbus_mv, pmu.vsys_mv, pmu.vbat_mv, pmu.die_c,
+                          pmu.status1, pmu.status2,
+                          pmu.irq[0], pmu.irq[1], pmu.irq[2]);
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -114,6 +125,9 @@ void app_main(void)
 
     waveshare_led_init();
     // El splash (logo mykeego + anillo) ya quedo cargado dentro de waveshare_led_init().
+    // ui_init() ya corrio dentro de waveshare_led_init(), asi que objects.main existe:
+    // creamos el anillo de exceso de velocidad sobre la pantalla principal.
+    overspeed_ring_init();
     splash_set_progress(15);
 
     buttons_init();
@@ -128,6 +142,15 @@ void app_main(void)
     // stored crash backtrace from the previous boot).
     diag_log_init();
     splash_set_progress(70);
+
+    // Bring up READ-ONLY monitoring of the AXP2101 PMU. We suspect the PMU is the
+    // one cutting power (device needs a PWR-button press to come back). The
+    // heartbeat below logs VBUS / Vsys / die-temp so the last line before a
+    // power-off tells us the cause. Logs whether the PMU answered on I2C.
+    if (pmu_monitor_init())
+        diag_log_line("pmu monitor ready");
+    else
+        diag_log_line("pmu monitor INIT FAILED (no I2C answer at 0x34)");
 
     // 6144 (was 4096): this task now also writes the heartbeat to the SD card,
     // and FATFS/fopen paths are stack-hungry.

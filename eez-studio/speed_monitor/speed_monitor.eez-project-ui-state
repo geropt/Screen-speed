@@ -2,7 +2,7 @@
   "navigation": {
     "selectedUserPageObject": "[speed_monitor.eez-project]:/userPages/0",
     "selectedUserWidgetObject": "[speed_monitor.eez-project]:/userWidgets/0",
-    "selectedGlobalVariableObject": "[speed_monitor.eez-project]:/variables/globalVariables/0",
+    "selectedGlobalVariableObject": "[speed_monitor.eez-project]:/variables/globalVariables/2",
     "selectedFontObject": "[speed_monitor.eez-project]:/fonts/3",
     "subnavigationSelectedItems": {
       "variables-tab/sub-navigation/selected-item": "Global"
@@ -178,8 +178,7 @@
                       "enableClose": false,
                       "icon": "svg:hierarchy"
                     }
-                  ],
-                  "active": true
+                  ]
                 },
                 {
                   "type": "tabset",
@@ -217,7 +216,8 @@
                   },
                   "icon": "svg:page"
                 }
-              ]
+              ],
+              "active": true
             },
             {
               "type": "row",
@@ -1118,13 +1118,14 @@
       "selectionBack": {
         "0": {
           "0": {
+            "0": {
+              "$selected": true
+            },
             "1": {}
           },
           "1": {},
           "3": {},
-          "4": {
-            "$selected": true
-          }
+          "4": {}
         }
       }
     },

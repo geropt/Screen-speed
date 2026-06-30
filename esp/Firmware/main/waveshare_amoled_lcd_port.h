@@ -54,7 +54,12 @@
 #endif
 
 
-#define LVGL_BUF_HEIGHT         (LCD_V_RES / 4)
+// ~1/10 de pantalla (recomendacion de LVGL). Antes era /4 (~105 KiB por buffer):
+// con PSRAM habilitado la DRAM interna queda fragmentada y los 2 buffers DMA ya no
+// entran contiguos -> assert(buf2) en el boot. A /10 son ~43 KiB c/u (~86 KiB total),
+// arregla el crash y libera ~125 KiB de RAM interna. Los buffers siguen en RAM interna
+// (MALLOC_CAP_DMA): el SH8601 hace DMA desde ahi, no desde PSRAM.
+#define LVGL_BUF_HEIGHT         (LCD_V_RES / 10)
 #define LVGL_TICK_PERIOD_MS     2
 #define LVGL_TASK_MAX_DELAY_MS  500
 #define LVGL_TASK_MIN_DELAY_MS  1

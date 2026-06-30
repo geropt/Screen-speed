@@ -1,5 +1,5 @@
 set(srcs "offline_maps.c" "nmea_parser.c" "buttons.c" "diag_log.c" "splash.c" "mykeego_logo.c"
-         "ruptela_binary.c" "vehicle_io.c")
+         "ruptela_binary.c" "vehicle_io.c" "pmu_monitor.c")
 
 # NOTE: this glob is evaluated at CMake configure time. If EEZ Studio generates a
 # new UI/font source, do a Full Clean (or reconfigure) so it gets picked up.
