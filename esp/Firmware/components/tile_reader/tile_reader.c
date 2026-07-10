@@ -126,8 +126,11 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
 {
     *outTileHasData = false;
 
-    char filename[64];
-    snprintf(filename, sizeof(filename), TILE_PATH "/tile_%ld_%ld.bin", filename_coord(tx), filename_coord(ty));
+    char filename[96];
+    /* Sharded layout: one subdirectory per tx column keeps each FAT directory
+     * small, so fopen() no longer scans thousands of entries per lookup. */
+    snprintf(filename, sizeof(filename), TILE_PATH "/%ld/tile_%ld_%ld.bin",
+             filename_coord(tx), filename_coord(tx), filename_coord(ty));
     // ESP_LOGI(TAG, "Opening file /tile_%d_%d.bin", tx, ty);
 
     FILE *f = fopen(filename, "rb");
