@@ -8,6 +8,7 @@ venv/
 
 # ESP-IDF
 build/
+.cache/
 managed_components/
 dependencies.lock
 
