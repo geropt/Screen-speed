@@ -228,7 +228,11 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
 bool get_speed_and_name_at(float lat, float lon, int *outSpeed,
                            char *outStreet, int maxStreetLen)
 {
-    if((lat == 0) && (lon == 0))
+    /* Reject bogus near-null-island fixes (lat/lon ~ 0) that some NMEA
+     * statements emit between real fixes. The device is in Argentina (~-34,-58)
+     * and is never legitimately near 0,0 — without this each junk fix triggers a
+     * full 9-tile neighbor scan of failing fopens, which is a big part of the lag. */
+    if(fabsf(lat) < 1.0f && fabsf(lon) < 1.0f)
         return false;
 
     int32_t lat_e7 = deg_to_e7(lat);

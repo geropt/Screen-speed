@@ -10,6 +10,7 @@ extern "C" {
 extern const lv_font_t ui_font_tjf_hardhatt_xtra_bold;
 extern const lv_font_t ui_font_tjf_hardhatt_bold;
 extern const lv_font_t ui_font_tjf_hardhatt_regular;
+extern const lv_font_t ui_font_street_name_latin;
 
 
 #ifdef __cplusplus

@@ -1,0 +1,13 @@
+App(
+    appid="nmea_replay",
+    name="NMEA GPS Replay",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="nmea_replay_app",
+    stack_size=4 * 1024,
+    fap_category="GPIO",
+    fap_description="Replays a captured GPS .log over USART TX (pin 13) at 115200, "
+    "stripping the terminal timestamp prefix and honoring inter-line timing. "
+    "Feeds an ESP UART RX as if it were the real RS232->TTL GPS source.",
+    fap_version="1.0",
+    requires=["gui", "storage", "dialogs"],
+)

@@ -1,0 +1,4 @@
+.ufbt-venv/
+*/dist/
+*/.vscode/
+*/.ufbt/

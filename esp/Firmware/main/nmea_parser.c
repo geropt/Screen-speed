@@ -447,6 +447,7 @@ out:
  */
 static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
 {
+    (void)len; /* no longer used since GPS_UNKNOWN posting was removed */
     const uint8_t *d = esp_gps->buffer;
     while (*d) {
         /* Start of a statement */
@@ -459,9 +460,11 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
             esp_gps->crc = 0;
             esp_gps->sat_count = 0;
             esp_gps->sat_num = 0;
-            /* Add character to item */
-            esp_gps->item_str[esp_gps->item_pos++] = *d;
-            esp_gps->item_str[esp_gps->item_pos] = '\0';
+            /* Add character to item (bounded — see note at the other write site) */
+            if (esp_gps->item_pos < NMEA_MAX_STATEMENT_ITEM_LENGTH - 1) {
+                esp_gps->item_str[esp_gps->item_pos++] = *d;
+                esp_gps->item_str[esp_gps->item_pos] = '\0';
+            }
         }
         /* Detect item separator character */
         else if (*d == ',') {
@@ -537,11 +540,11 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
             } else {
                 ESP_LOGD(GPS_TAG, "CRC Error for statement:%s", esp_gps->buffer);
             }
-            if (esp_gps->cur_statement == STATEMENT_UNKNOWN) {
-                /* Send signal to notify that one unknown statement has been met */
-                esp_event_post_to(esp_gps->event_loop_hdl, ESP_NMEA_EVENT, GPS_UNKNOWN,
-                                  esp_gps->buffer, len, 100 / portTICK_PERIOD_MS);
-            }
+            /* Unknown statements (the Ruptela `###IMEI...` marker, $GNGNS/$GNGST,
+             * binary I/O frames) arrive several times per second. Posting a
+             * GPS_UNKNOWN event for each one only floods the event loop (each post
+             * can block up to 100 ms) and spams the log — nothing consumes it. So
+             * we no longer post it; this removes a big chunk of the per-fix load. */
         }
         /* Other non-space character */
         else {
@@ -549,9 +552,15 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
                 /* Add to CRC */
                 esp_gps->crc ^= (uint8_t)(*d);
             }
-            /* Add character to item */
-            esp_gps->item_str[esp_gps->item_pos++] = *d;
-            esp_gps->item_str[esp_gps->item_pos] = '\0';
+            /* Add character to item (bounded). An overlong field with no comma —
+             * the Ruptela `###IMEI...` line and binary I/O frames — must not
+             * overflow the 16-byte item_str and corrupt the struct; that trashed
+             * event_loop_hdl and caused the LoadProhibited crash. Excess bytes of
+             * such non-NMEA junk are simply dropped. */
+            if (esp_gps->item_pos < NMEA_MAX_STATEMENT_ITEM_LENGTH - 1) {
+                esp_gps->item_str[esp_gps->item_pos++] = *d;
+                esp_gps->item_str[esp_gps->item_pos] = '\0';
+            }
         }
         /* Process next character */
         d++;
