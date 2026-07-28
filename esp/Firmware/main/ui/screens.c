@@ -13,34 +13,6 @@
 objects_t objects;
 lv_obj_t *tick_value_change_obj;
 
-static void event_handler_cb_arc_indicator_arc_indicator_left(lv_event_t *e) {
-    lv_event_code_t event = lv_event_get_code(e);
-    void *flowState = lv_event_get_user_data(e);
-    (void)flowState;
-    
-    if (event == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *ta = lv_event_get_target(e);
-        if (tick_value_change_obj != ta) {
-            int32_t value = lv_arc_get_value(ta);
-            assignIntegerProperty(flowState, 1, 3, value, "Failed to assign Value in Arc widget");
-        }
-    }
-}
-
-static void event_handler_cb_arc_indicator_arc_indicator_right(lv_event_t *e) {
-    lv_event_code_t event = lv_event_get_code(e);
-    void *flowState = lv_event_get_user_data(e);
-    (void)flowState;
-    
-    if (event == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *ta = lv_event_get_target(e);
-        if (tick_value_change_obj != ta) {
-            int32_t value = lv_arc_get_value(ta);
-            assignIntegerProperty(flowState, 0, 3, value, "Failed to assign Value in Arc widget");
-        }
-    }
-}
-
 void create_screen_main() {
     void *flowState = getFlowState(0, 0);
     (void)flowState;
@@ -147,21 +119,25 @@ void create_screen_main() {
             lv_label_set_text(obj, "Unknown street");
         }
         {
-            lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj0 = obj;
-            lv_obj_set_pos(obj, 0, 0);
-            lv_obj_set_size(obj, 466, 466);
-            lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_pad_right(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_arc_indicator(obj, getFlowState(flowState, 8), 2);
-            lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
+            // overspeed_ring: anillo completo alrededor de toda la pantalla, invisible
+            // por defecto. Titila (ver update_overspeed_ring en dynamic.c) cuando la
+            // velocidad actual supera el limite de la via.
+            lv_obj_t *obj = lv_arc_create(parent_obj);
+            objects.overspeed_ring = obj;
+            lv_obj_set_pos(obj, 13, 13);
+            lv_obj_set_size(obj, 440, 440);
+            lv_arc_set_bg_angles(obj, 0, 360);
+            lv_arc_set_range(obj, 0, 100);
+            lv_arc_set_value(obj, 100);
+            lv_obj_remove_style(obj, NULL, LV_PART_KNOB);
+            lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_arc_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_arc_color(obj, lv_color_hex(0xffc1140d), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+            lv_obj_set_style_arc_width(obj, 20, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+            lv_obj_set_style_arc_opa(obj, 0, LV_PART_INDICATOR | LV_STATE_DEFAULT);
         }
     }
-    
+
     tick_screen_main();
 }
 
@@ -186,78 +162,10 @@ void tick_screen_main() {
             tick_value_change_obj = NULL;
         }
     }
-    tick_user_widget_arc_indicator(getFlowState(flowState, 8), 2);
 }
-
-void create_user_widget_arc_indicator(lv_obj_t *parent_obj, void *flowState, int startWidgetIndex) {
-    (void)flowState;
-    (void)startWidgetIndex;
-    lv_obj_t *obj = parent_obj;
-    {
-        lv_obj_t *parent_obj = obj;
-        {
-            // arc_indicator_left
-            lv_obj_t *obj = lv_arc_create(parent_obj);
-            ((lv_obj_t **)&objects)[startWidgetIndex + 0] = obj;
-            lv_obj_set_pos(obj, 13, 13);
-            lv_obj_set_size(obj, 440, 440);
-            lv_arc_set_range(obj, 0, 120);
-            lv_arc_set_bg_start_angle(obj, 170);
-            lv_arc_set_bg_end_angle(obj, 270);
-            lv_arc_set_mode(obj, LV_ARC_MODE_REVERSE);
-            lv_obj_add_event_cb(obj, event_handler_cb_arc_indicator_arc_indicator_left, LV_EVENT_ALL, flowState);
-            lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_arc_color(obj, lv_color_hex(0xffc1140d), LV_PART_INDICATOR | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_width(obj, 20, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_opa(obj, 255, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-            lv_obj_set_style_bg_opa(obj, 0, LV_PART_KNOB | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-        }
-        {
-            // arc_indicator_right
-            lv_obj_t *obj = lv_arc_create(parent_obj);
-            ((lv_obj_t **)&objects)[startWidgetIndex + 1] = obj;
-            lv_obj_set_pos(obj, 13, 13);
-            lv_obj_set_size(obj, 440, 440);
-            lv_arc_set_range(obj, 0, 120);
-            lv_arc_set_bg_start_angle(obj, 270);
-            lv_arc_set_bg_end_angle(obj, 370);
-            lv_obj_add_event_cb(obj, event_handler_cb_arc_indicator_arc_indicator_right, LV_EVENT_ALL, flowState);
-            lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_arc_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_color(obj, lv_color_hex(0xffc1140d), LV_PART_INDICATOR | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_width(obj, 20, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-            lv_obj_set_style_bg_opa(obj, 0, LV_PART_KNOB | LV_STATE_DEFAULT);
-        }
-    }
-}
-
-void tick_user_widget_arc_indicator(void *flowState, int startWidgetIndex) {
-    (void)flowState;
-    (void)startWidgetIndex;
-    {
-        int32_t new_val = evalIntegerProperty(flowState, 1, 3, "Failed to evaluate Value in Arc widget");
-        int32_t cur_val = lv_arc_get_value(((lv_obj_t **)&objects)[startWidgetIndex + 0]);
-        if (new_val != cur_val) {
-            tick_value_change_obj = ((lv_obj_t **)&objects)[startWidgetIndex + 0];
-            lv_arc_set_value(((lv_obj_t **)&objects)[startWidgetIndex + 0], new_val);
-            tick_value_change_obj = NULL;
-        }
-    }
-    {
-        int32_t new_val = evalIntegerProperty(flowState, 0, 3, "Failed to evaluate Value in Arc widget");
-        int32_t cur_val = lv_arc_get_value(((lv_obj_t **)&objects)[startWidgetIndex + 1]);
-        if (new_val != cur_val) {
-            tick_value_change_obj = ((lv_obj_t **)&objects)[startWidgetIndex + 1];
-            lv_arc_set_value(((lv_obj_t **)&objects)[startWidgetIndex + 1], new_val);
-            tick_value_change_obj = NULL;
-        }
-    }
-}
-
 
 static const char *screen_names[] = { "Main" };
-static const char *object_names[] = { "main", "obj0", "obj0__arc_indicator_left", "obj0__arc_indicator_right", "speed_text_container", "current_speed_label", "speed_unit_label", "speed_limit_container", "speed_limit_label", "speed_limit_warning_label", "street_name" };
+static const char *object_names[] = { "main", "speed_text_container", "current_speed_label", "speed_unit_label", "speed_limit_container", "speed_limit_label", "speed_limit_warning_label", "street_name", "overspeed_ring" };
 
 
 typedef void (*tick_screen_func_t)();

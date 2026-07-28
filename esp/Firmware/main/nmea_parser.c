@@ -8,6 +8,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -20,6 +21,13 @@
 #define NMEA_PARSER_RUNTIME_BUFFER_SIZE (CONFIG_NMEA_PARSER_RING_BUFFER_SIZE / 2)
 #define NMEA_MAX_STATEMENT_ITEM_LENGTH (16)
 #define NMEA_EVENT_LOOP_QUEUE_SIZE (16)
+
+/* Pro5-Lite / HCV5-Lite tracker units cap the transparent channel at 9600 baud
+ * (Ruptela "Transparent Channel Configuration" doc); Pro5 / HCV5 units default
+ * to 115200. Probe both so the same firmware binary works with either. */
+static const uint32_t nmea_baud_candidates[] = { 9600, 115200 };
+#define NMEA_BAUD_PROBE_MS (3000)
+#define NMEA_BAUD_RELOCK_MS (30000)
 
 /**
  * @brief Define of NMEA Parser Event base
@@ -50,6 +58,10 @@ typedef struct {
     esp_event_loop_handle_t event_loop_hdl;        /*!< Event loop handle */
     TaskHandle_t tsk_hdl;                          /*!< NMEA Parser task handle */
     QueueHandle_t event_queue;                     /*!< UART event queue handle */
+    uint32_t baud_rate;                            /*!< Baud rate currently in use */
+    uint8_t baud_idx;                              /*!< Index into nmea_baud_candidates */
+    bool baud_locked;                              /*!< True once a valid checksum has been seen */
+    TickType_t last_valid_tick;                    /*!< Tick of the last statement with a valid checksum */
 } esp_gps_t;
 
 /**
@@ -494,6 +506,12 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
             uint8_t crc = (uint8_t)strtol(esp_gps->item_str, NULL, 16);
             /* CRC passed */
             if (esp_gps->crc == crc) {
+                /* Confirms the current baud rate is correctly decoding the
+                 * link, whether or not this particular statement carries a
+                 * fix — stops the baud auto-probe from firing just because
+                 * the GPS itself has no fix (e.g. RMC status 'V'). */
+                esp_gps->last_valid_tick = xTaskGetTickCount();
+                esp_gps->baud_locked = true;
                 switch (esp_gps->cur_statement) {
 #if CONFIG_NMEA_STATEMENT_GGA
                 case STATEMENT_GGA:
@@ -577,13 +595,30 @@ static void esp_handle_uart_pattern(esp_gps_t *esp_gps)
 {
     int pos = uart_pattern_pop_pos(esp_gps->uart_port);
     if (pos != -1) {
-        /* read one line(include '\n') */
-        int read_len = uart_read_bytes(esp_gps->uart_port, esp_gps->buffer, pos + 1, 100 / portTICK_PERIOD_MS);
-        /* make sure the line is a standard string */
-        esp_gps->buffer[read_len] = '\0';
-        /* Send new line to handle */
-        if (gps_decode(esp_gps, read_len + 1) != ESP_OK) {
-            ESP_LOGW(GPS_TAG, "GPS decode line failed");
+        /* Read up to the pattern (include '\n'), in chunks bounded by the
+         * runtime buffer. `pos` comes from the ring buffer and can be as
+         * large as CONFIG_NMEA_PARSER_RING_BUFFER_SIZE (1024) when no '\n'
+         * arrives for a while — a Ruptela binary I/O frame or the
+         * "###IMEI..." marker — while esp_gps->buffer is only half that
+         * size. A real NMEA sentence is at most ~82 bytes, so it can never
+         * straddle a chunk boundary; only non-NMEA junk ever gets split. */
+        size_t remaining = (size_t)pos + 1;
+        while (remaining > 0) {
+            size_t chunk = remaining;
+            if (chunk > NMEA_PARSER_RUNTIME_BUFFER_SIZE - 1) {
+                chunk = NMEA_PARSER_RUNTIME_BUFFER_SIZE - 1;
+            }
+            int read_len = uart_read_bytes(esp_gps->uart_port, esp_gps->buffer, chunk, 100 / portTICK_PERIOD_MS);
+            if (read_len <= 0) {
+                break;
+            }
+            /* make sure the line is a standard string */
+            esp_gps->buffer[read_len] = '\0';
+            /* Send new line to handle */
+            if (gps_decode(esp_gps, read_len + 1) != ESP_OK) {
+                ESP_LOGW(GPS_TAG, "GPS decode line failed");
+            }
+            remaining -= (size_t)read_len;
         }
     } else {
         ESP_LOGW(GPS_TAG, "Pattern Queue Size too small");
@@ -632,6 +667,22 @@ static void nmea_parser_task_entry(void *arg)
                 break;
             }
         }
+        /* Baud auto-detect. Checked every iteration, not only on a queue
+         * timeout: at the wrong baud rate the UART still produces a steady
+         * stream of garbage events (framing errors, spurious pattern
+         * matches), so the queue rarely actually times out. */
+        TickType_t now = xTaskGetTickCount();
+        TickType_t elapsed = now - esp_gps->last_valid_tick;
+        if (esp_gps->baud_locked && elapsed > pdMS_TO_TICKS(NMEA_BAUD_RELOCK_MS)) {
+            esp_gps->baud_locked = false;
+            ESP_LOGW(GPS_TAG, "NMEA link stale, resuming baud probe");
+        }
+        if (!esp_gps->baud_locked && elapsed > pdMS_TO_TICKS(NMEA_BAUD_PROBE_MS)) {
+            esp_gps->baud_idx = (esp_gps->baud_idx + 1) % (sizeof(nmea_baud_candidates) / sizeof(nmea_baud_candidates[0]));
+            nmea_parser_set_baud(esp_gps, nmea_baud_candidates[esp_gps->baud_idx]);
+            esp_gps->last_valid_tick = xTaskGetTickCount();
+            ESP_LOGW(GPS_TAG, "no valid NMEA, probing %" PRIu32 " baud", esp_gps->baud_rate);
+        }
         /* Drive the event loop */
         esp_event_loop_run(esp_gps->event_loop_hdl, pdMS_TO_TICKS(50));
     }
@@ -677,6 +728,16 @@ nmea_parser_handle_t nmea_parser_init(const nmea_parser_config_t *config)
     /* Set attributes */
     esp_gps->uart_port = config->uart.uart_port;
     esp_gps->all_statements &= 0xFE;
+    esp_gps->baud_rate = config->uart.baud_rate;
+    esp_gps->baud_locked = false;
+    esp_gps->last_valid_tick = xTaskGetTickCount();
+    esp_gps->baud_idx = 0;
+    for (size_t i = 0; i < sizeof(nmea_baud_candidates) / sizeof(nmea_baud_candidates[0]); i++) {
+        if (nmea_baud_candidates[i] == config->uart.baud_rate) {
+            esp_gps->baud_idx = i;
+            break;
+        }
+    }
     /* Install UART friver */
     uart_config_t uart_config = {
         .baud_rate = config->uart.baud_rate,
@@ -792,4 +853,32 @@ esp_err_t nmea_parser_remove_handler(nmea_parser_handle_t nmea_hdl, esp_event_ha
 {
     esp_gps_t *esp_gps = (esp_gps_t *)nmea_hdl;
     return esp_event_handler_unregister_with(esp_gps->event_loop_hdl, ESP_NMEA_EVENT, ESP_EVENT_ANY_ID, event_handler);
+}
+
+esp_err_t nmea_parser_set_baud(nmea_parser_handle_t nmea_hdl, uint32_t baud_rate)
+{
+    esp_gps_t *esp_gps = (esp_gps_t *)nmea_hdl;
+    uart_disable_pattern_det_intr(esp_gps->uart_port);
+    esp_err_t err = uart_set_baudrate(esp_gps->uart_port, baud_rate);
+    if (err != ESP_OK) {
+        return err;
+    }
+    esp_gps->baud_rate = baud_rate;
+    uart_flush_input(esp_gps->uart_port);
+    xQueueReset(esp_gps->event_queue);
+    /* Discard any statement fragment left over from the previous baud rate */
+    esp_gps->item_pos = 0;
+    esp_gps->item_num = 0;
+    esp_gps->asterisk = 0;
+    esp_gps->crc = 0;
+    esp_gps->parsed_statement = 0;
+    uart_enable_pattern_det_baud_intr(esp_gps->uart_port, '\n', 1, 9, 0, 0);
+    uart_pattern_queue_reset(esp_gps->uart_port, NMEA_EVENT_LOOP_QUEUE_SIZE);
+    return ESP_OK;
+}
+
+uint32_t nmea_parser_get_baud(nmea_parser_handle_t nmea_hdl)
+{
+    esp_gps_t *esp_gps = (esp_gps_t *)nmea_hdl;
+    return esp_gps->baud_rate;
 }

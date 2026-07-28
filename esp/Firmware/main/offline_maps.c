@@ -2,9 +2,11 @@
 #include "tile_reader.h"
 #include "waveshare_amoled_lcd_port.h"
 #include "dynamic.h"
+#include "splash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include <inttypes.h>
 #include "nmea_parser.h"
 
 #define TIME_ZONE (+8)   // Beijing Time
@@ -31,6 +33,15 @@ static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_ba
     {
     case GPS_UPDATE:
         gps = (gps_t *)event_data;
+        {
+            /* Log the baud rate the auto-probe locked onto, once, so it
+             * ends up in /sdcard/diag.log for each unit. */
+            static bool baud_logged = false;
+            if (!baud_logged) {
+                ESP_LOGI(TAG, "NMEA link up at %" PRIu32 " baud", nmea_parser_get_baud(event_handler_arg));
+                baud_logged = true;
+            }
+        }
         /* print information parsed from GPS statements */
         ESP_LOGI(TAG, "%d/%d/%d %d:%d:%d => \r\n"
                       "\t\t\t\t\t\tlatitude   = %.05f°N\r\n"
@@ -59,21 +70,30 @@ void app_main(void)
     esp_err_t err;
 
     waveshare_led_init();
+    // El splash (logo mykeego + anillo) ya quedo cargado dentro de waveshare_led_init().
 
     err = sd_card_init();
     if (err != ESP_OK)
         return;
+    splash_set_progress(40);
 
     xTaskCreate(calculation_task, "calculation_task", 4096, NULL, 5, NULL);
     gps_queue = xQueueCreate(5, sizeof(gps_t));
 
-    /* NMEA parser configuration */
+    /* NMEA parser configuration. Initial baud rate comes from
+     * CONFIG_NMEA_PARSER_UART_BAUD_RATE; the parser auto-probes between
+     * 9600 and 115200 until it sees NMEA with a valid checksum, so it
+     * works with both Pro5-Lite/HCV5-Lite (capped at 9600) and Pro5/HCV5
+     * (115200) trackers without reflashing. */
     nmea_parser_config_t config = NMEA_PARSER_CONFIG_DEFAULT();
-    config.uart.baud_rate = 115200;
     /* init NMEA parser library */
     nmea_parser_handle_t nmea_hdl = nmea_parser_init(&config);
     /* register event handler for NMEA parser library */
-    nmea_parser_add_handler(nmea_hdl, gps_event_handler, NULL);
+    nmea_parser_add_handler(nmea_hdl, gps_event_handler, nmea_hdl);
+    splash_set_progress(90);
+
+    // Inicializacion completa: fundido del splash hacia la pantalla principal.
+    splash_finish();
 
     while (1)
     {

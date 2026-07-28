@@ -1,8 +1,11 @@
 # NMEA GPS Replay — Flipper Zero FAP
 
 Reproduce un log crudo del RS232 del GPS por el **TX del Flipper (pin 13)** hacia la
-**ESP32 GPIO18**, a 115200 8N1, como si fuera la salida del conversor RS232→TTL del setup
-real. Además alimenta la ESP con **5V (pin 1, OTG) + masa (pin 8)** del propio Flipper.
+**ESP32 GPIO18**, 8N1, como si fuera la salida del conversor RS232→TTL del setup real.
+Arranca a **9600 baud** (tope del Ruptela Pro5-Lite/HCV5-Lite) y se puede alternar a
+**115200** (default de Pro5/HCV5) con **◄/►**, en caliente, para probar el auto-detect
+de baud del firmware sin desconectar nada. Además alimenta la ESP con **5V (pin 1, OTG)
++ masa (pin 8)** del propio Flipper.
 
 Sirve para reproducir en el banco el comportamiento en tiempo real (fixes a ~1 Hz) sin tener
 que conducir — por ejemplo para diagnosticar el lag de la pantalla.
@@ -60,5 +63,6 @@ ufbt cli   # luego:  storage write /ext/nmea3.log   (o usar qFlipper, más simpl
 1. Cablear Flipper ↔ ESP (tabla de arriba).
 2. Abrir **NMEA GPS Replay** en el Flipper (categoría GPIO).
 3. Elegir el `.log` en el explorador.
-4. Reproduce en **loop continuo**. Pantalla: líneas/bytes enviados, tiempo, nº de loop.
-5. **Back** detiene y libera todo (serial + OTG 5V).
+4. Reproduce en **loop continuo**. Pantalla: líneas/bytes enviados, tiempo, nº de loop, baud actual.
+5. **◄/►** cambia el baud (9600 ⇄ 115200) sin interrumpir la reproducción.
+6. **Back** detiene y libera todo (serial + OTG 5V).

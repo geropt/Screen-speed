@@ -1,8 +1,11 @@
 /*
  * NMEA GPS Replay - Flipper Zero FAP
  *
- * Streams a captured GPS RS232 log out the USART TX (pin 13) at 115200 8N1,
+ * Streams a captured GPS RS232 log out the USART TX (pin 13) 8N1,
  * feeding an ESP32 UART RX (GPIO18) as if it were the real RS232->TTL GPS.
+ * Baud rate defaults to 9600 (Ruptela Pro5-Lite/HCV5-Lite cap) and can be
+ * toggled to 115200 (Pro5/HCV5 default) with Left/Right, live, to exercise
+ * the ESP firmware's baud auto-detect without unplugging anything.
  *
  * The capture format is:  "HH:MM:SS.mmm, <exact GPS bytes>\n"
  * The 14-byte terminal timestamp prefix is stripped; everything after it is the
@@ -25,7 +28,8 @@
 
 #define TAG "NmeaReplay"
 
-#define UART_BAUD 115200u
+#define UART_BAUD_DEFAULT 9600u
+#define UART_BAUD_ALT 115200u
 #define READ_CHUNK 512u
 #define LINE_MAX 256u
 #define PREFIX_LEN 14u /* "HH:MM:SS.mmm, " */
@@ -46,6 +50,7 @@ typedef struct {
     uint32_t bytes_sent;
     uint32_t loops;
     uint32_t elapsed_s;
+    uint32_t baud;
     bool running;
 } NmeaReplayApp;
 
@@ -68,7 +73,9 @@ static void nmea_replay_draw_callback(Canvas* canvas, void* ctx) {
     snprintf(buf, sizeof(buf), "bytes: %lu  t: %lus", app->bytes_sent, app->elapsed_s);
     canvas_draw_str(canvas, 2, 48, buf);
 
-    canvas_draw_str(canvas, 2, 62, app->running ? "TX 115200  Back=stop" : "done - Back=exit");
+    snprintf(buf, sizeof(buf), "TX %lu  <>=baud  Back=%s",
+             app->baud, app->running ? "stop" : "exit");
+    canvas_draw_str(canvas, 2, 62, buf);
 }
 
 static void nmea_replay_input_callback(InputEvent* input_event, void* ctx) {
@@ -76,24 +83,35 @@ static void nmea_replay_input_callback(InputEvent* input_event, void* ctx) {
     furi_message_queue_put(app->input_queue, input_event, FuriWaitForever);
 }
 
-/* Returns true if the user pressed Back (short) since last check. */
-static bool nmea_replay_back_pressed(NmeaReplayApp* app) {
+/* Drains pending input. Left/Right live-toggle the baud rate (deinit + init
+ * the serial handle at the new rate) so the auto-detect on the ESP side can
+ * be exercised without restarting the replay. Returns true if Back was
+ * pressed since the last check. */
+static bool nmea_replay_poll_input(NmeaReplayApp* app, FuriHalSerialHandle* serial) {
     InputEvent event;
+    bool back_pressed = false;
     while(furi_message_queue_get(app->input_queue, &event, 0) == FuriStatusOk) {
-        if(event.type == InputTypeShort && event.key == InputKeyBack) {
-            return true;
+        if(event.type != InputTypeShort) continue;
+        if(event.key == InputKeyBack) {
+            back_pressed = true;
+        } else if(event.key == InputKeyLeft || event.key == InputKeyRight) {
+            uint32_t new_baud = (app->baud == UART_BAUD_DEFAULT) ? UART_BAUD_ALT : UART_BAUD_DEFAULT;
+            furi_hal_serial_deinit(serial);
+            furi_hal_serial_init(serial, new_baud);
+            app->baud = new_baud;
+            view_port_update(app->view_port);
         }
     }
-    return false;
+    return back_pressed;
 }
 
 /* Sleep `ms` in small slices; returns true if Back was pressed during the wait. */
-static bool nmea_replay_sleep(NmeaReplayApp* app, uint32_t ms) {
+static bool nmea_replay_sleep(NmeaReplayApp* app, FuriHalSerialHandle* serial, uint32_t ms) {
     while(ms > 0) {
         uint32_t slice = ms < SLICE_MS ? ms : SLICE_MS;
         furi_delay_ms(slice);
         ms -= slice;
-        if(nmea_replay_back_pressed(app)) return true;
+        if(nmea_replay_poll_input(app, serial)) return true;
     }
     return false;
 }
@@ -172,7 +190,7 @@ static bool nmea_replay_play_once(
                     if(have_prev_ts) {
                         uint32_t delay = (ts >= prev_ts) ? (ts - prev_ts) : 0;
                         if(delay > MAX_GAP_MS) delay = MAX_GAP_MS;
-                        if(nmea_replay_sleep(app, delay)) {
+                        if(nmea_replay_sleep(app, serial, delay)) {
                             aborted = true;
                         }
                     }
@@ -195,7 +213,7 @@ static bool nmea_replay_play_once(
                 /* overlong lines: keep first LINE_MAX-1 bytes, drop the rest */
             }
         }
-        if(nmea_replay_back_pressed(app)) {
+        if(nmea_replay_poll_input(app, serial)) {
             aborted = true;
             goto done;
         }
@@ -213,6 +231,7 @@ int32_t nmea_replay_app(void* p) {
     UNUSED(p);
     NmeaReplayApp* app = malloc(sizeof(NmeaReplayApp));
     memset(app, 0, sizeof(NmeaReplayApp));
+    app->baud = UART_BAUD_DEFAULT;
 
     app->input_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
     app->view_port = view_port_alloc();
@@ -241,7 +260,7 @@ int32_t nmea_replay_app(void* p) {
         furi_hal_power_enable_otg(); /* 5V on pin 1 */
         FuriHalSerialHandle* serial = furi_hal_serial_control_acquire(FuriHalSerialIdUsart);
         if(serial) {
-            furi_hal_serial_init(serial, UART_BAUD);
+            furi_hal_serial_init(serial, app->baud);
 
             app->running = true;
             view_port_update(app->view_port);

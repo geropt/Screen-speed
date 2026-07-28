@@ -146,7 +146,7 @@ typedef void *nmea_parser_handle_t;
         .uart = {                                 \
             .uart_port = UART_NUM_1,              \
             .rx_pin = CONFIG_NMEA_PARSER_UART_RXD,\
-            .baud_rate = 9600,                    \
+            .baud_rate = CONFIG_NMEA_PARSER_UART_BAUD_RATE, \
             .data_bits = UART_DATA_8_BITS,        \
             .parity = UART_PARITY_DISABLE,        \
             .stop_bits = UART_STOP_BITS_1,        \
@@ -204,6 +204,26 @@ esp_err_t nmea_parser_add_handler(nmea_parser_handle_t nmea_hdl, esp_event_handl
  *  - Others: Fail
  */
 esp_err_t nmea_parser_remove_handler(nmea_parser_handle_t nmea_hdl, esp_event_handler_t event_handler);
+
+/**
+ * @brief Change the UART baud rate at runtime
+ *
+ * Re-arms pattern detection and discards whatever is left in the ring
+ * buffer; the event loop and registered handlers are left untouched.
+ *
+ * @param nmea_hdl handle of NMEA parser
+ * @param baud_rate new baud rate
+ * @return esp_err_t ESP_OK on success, ESP_FAIL on error
+ */
+esp_err_t nmea_parser_set_baud(nmea_parser_handle_t nmea_hdl, uint32_t baud_rate);
+
+/**
+ * @brief Get the UART baud rate currently in use
+ *
+ * @param nmea_hdl handle of NMEA parser
+ * @return uint32_t baud rate
+ */
+uint32_t nmea_parser_get_baud(nmea_parser_handle_t nmea_hdl);
 
 #ifdef __cplusplus
 }

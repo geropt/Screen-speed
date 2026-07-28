@@ -169,6 +169,16 @@ menu "NMEA Configuration"
         help
             Size of the ring buffer used for UART Rx channel.
 
+    config NMEA_PARSER_UART_BAUD_RATE
+        int "GPS UART initial baud rate"
+        default 9600
+        help
+            Baud rate to probe first at startup. The firmware auto-detects
+            between 9600 and 115200 by waiting for NMEA sentences with a
+            valid checksum, so this value only picks which one is tried
+            first (Ruptela Pro5-Lite/HCV5-Lite are capped at 9600; Pro5/HCV5
+            default to 115200).
+
     config NMEA_PARSER_TASK_STACK_SIZE
         int "NMEA Parser Task Stack Size"
         range 0 4096

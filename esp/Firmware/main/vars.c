@@ -1,7 +1,7 @@
 #include "ui/vars.h"
 #include "dynamic.h"
 
-int32_t indicator_threshold = LIMIT_INDICATOR_MIN_VAL;
+int32_t indicator_threshold = 10;
 int32_t current_speed = 0;
 int32_t speed_limit = 78;
 
