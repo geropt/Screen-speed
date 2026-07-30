@@ -20,11 +20,18 @@
 // #define HIGHWAY_LIMIT           150.0
 #define MAX_STREET_DISTANCE     URBAN_STREET_LIMIT
 
+/* Map-match tuning: heading + stickiness (meters / degrees / km/h). */
+#define HEADING_WEIGHT_M_PER_DEG  0.20f  /* 45° ≈ +9 m score */
+#define STICK_BONUS_M             12.0f  /* prefer last locked street */
+#define HEADING_MIN_SPEED_KMH     8.0f   /* COG unreliable when slower */
+#define EARLY_EXIT_DIST_M         15.0f  /* only skip neighbors if this close */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-bool get_speed_and_name_at(float lat, float lon, int *outSpeed, char *outStreet, int maxStreetLen);
+bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
+                           int *outSpeed, char *outStreet, int maxStreetLen);
 
 #ifdef __cplusplus
 }

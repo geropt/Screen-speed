@@ -74,13 +74,6 @@ static float haversine(float lat1, float lon1, float lat2, float lon2)
     return EARTH_RADIUS * c;
 }
 
-// // ------------------ distance (fast) ------------------
-// static float dist2(float lat1, float lon1, float lat2, float lon2) {
-//     float dx = lon1 - lon2;
-//     float dy = lat1 - lat2;
-//     return dx*dx + dy*dy;
-// }
-
 /**
  * Accurate distance from a point P to segment AB using:
  * 1. Euclidean projection (fast)
@@ -116,13 +109,36 @@ static float distance_point_to_segment_haversine(float plat, float plon,
     return haversine(px, py, proj_lat, proj_lon);
 }
 
+/* Smallest angle between COG and segment bearing, treating reverse as same road. */
+static float heading_err_deg(float cog_deg, float alat, float alon, float blat, float blon)
+{
+    float dlat = blat - alat;
+    float dlon = (blon - alon) * cosf(alat * (float)M_PI / 180.0f);
+    if (dlat == 0.0f && dlon == 0.0f)
+        return 90.0f;
+
+    float brng = atan2f(dlon, dlat) * (180.0f / (float)M_PI);
+    if (brng < 0.0f)
+        brng += 360.0f;
+
+    float d = fabsf(cog_deg - brng);
+    if (d > 180.0f)
+        d = 360.0f - d;
+    if (d > 90.0f)
+        d = 180.0f - d;
+    return d;
+}
+
 // --------------------------------------------------------
 //         MAIN FUNCTION (called by the rest of app)
 // --------------------------------------------------------
-bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
-                         float *outBestDist, int *outBestSpeed,
-                         char *outBestName, size_t bestNameSize,
-                         bool *outTileHasData)
+static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
+                                float cog_deg, bool use_heading,
+                                const char *preferred_name,
+                                float *outBestScore, float *outBestDist,
+                                int *outBestSpeed,
+                                char *outBestName, size_t bestNameSize,
+                                bool *outTileHasData)
 {
     *outTileHasData = false;
 
@@ -131,7 +147,6 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
      * small, so fopen() no longer scans thousands of entries per lookup. */
     snprintf(filename, sizeof(filename), TILE_PATH "/%ld/tile_%ld_%ld.bin",
              filename_coord(tx), filename_coord(tx), filename_coord(ty));
-    // ESP_LOGI(TAG, "Opening file /tile_%d_%d.bin", tx, ty);
 
     FILE *f = fopen(filename, "rb");
     if (!f) {
@@ -140,17 +155,19 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
     }
 
     uint32_t segCount = read_u32(f);
+    float localBestScore = 1e12f;
     float localBestDist = 1e12f;
     int   localBestSpeed = 0;
     char  localBestName[128] = "";
+    const float max_hdg_penalty = use_heading ? (HEADING_WEIGHT_M_PER_DEG * 90.0f) : 0.0f;
 
     for (uint32_t s = 0; s < segCount; s++) {
 
         uint16_t numPoints = read_u16(f);
 
+        float segBestScore = 1e12f;
         float segBestDist = 1e12f;
 
-        // read all points into temporary local array
         float *lats  = malloc(sizeof(float) * numPoints);
         float *lons  = malloc(sizeof(float) * numPoints);
 
@@ -161,20 +178,33 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             lons[p] = lon_i / 1e7f;
         }
 
-        // Compute minimum distance to ANY segment Pi → Pi+1
         for (uint16_t p = 0; p < numPoints - 1; p++) {
-
             float d = distance_point_to_segment_haversine(
                         lat, lon,
                         lats[p],   lons[p],
                         lats[p+1], lons[p+1]
                     );
-            // ESP_LOGW(TAG, "new distance: %f", d);
 
-            if (d < segBestDist)
-            {
+            if (d > MAX_STREET_DISTANCE)
+                continue;
+
+            /* Skip heading math when this edge cannot beat current best. */
+            if (d > segBestScore && d > localBestScore)
+                continue;
+
+            float sc = d;
+            if (use_heading) {
+                if (d + max_hdg_penalty < segBestScore || d + max_hdg_penalty < localBestScore + STICK_BONUS_M) {
+                    sc = d + HEADING_WEIGHT_M_PER_DEG * heading_err_deg(
+                            cog_deg, lats[p], lons[p], lats[p+1], lons[p+1]);
+                } else {
+                    continue;
+                }
+            }
+
+            if (sc < segBestScore) {
+                segBestScore = sc;
                 segBestDist = d;
-                // ESP_LOGI(TAG, "best distance updated; %f", d);
             }
         }
 
@@ -193,21 +223,31 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             nameBuf = "";
         }
 
-        // VALID STREET CHECK
         bool validStreet = (nameLen > 0 && nameBuf[0] != 0);
 
         if (validStreet)
-            *outTileHasData = true;  // good
+            *outTileHasData = true;
 
-        // but ALSO check this:
-        if (!validStreet)
+        if (!validStreet || segBestDist > MAX_STREET_DISTANCE) {
+            if (nameBuf && nameBuf != (char*)"")
+                free(nameBuf);
             continue;
+        }
 
-        if (segBestDist < localBestDist) {
+        float score = segBestScore;
+        if (preferred_name && preferred_name[0] &&
+            strncmp(nameBuf, preferred_name, MAX_STREET_NAME) == 0) {
+            score -= STICK_BONUS_M;
+            if (score < 0.0f)
+                score = 0.0f;
+        }
+
+        if (score < localBestScore) {
+            localBestScore = score;
             localBestDist = segBestDist;
             localBestSpeed = speed;
             strncpy(localBestName, nameBuf, sizeof(localBestName)-1);
-            // ESP_LOGW(TAG, "updating fields name: %s \t speed: %d \t dist: %f", localBestName, localBestSpeed, localBestDist);
+            localBestName[sizeof(localBestName)-1] = 0;
         }
 
         if (nameBuf && nameBuf != (char*)"")
@@ -216,7 +256,7 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
 
     fclose(f);
 
-    // output best segment from THIS tile only
+    *outBestScore = localBestScore;
     *outBestDist = localBestDist;
     *outBestSpeed = localBestSpeed;
     strncpy(outBestName, localBestName, bestNameSize);
@@ -225,9 +265,12 @@ bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
     return true;
 }
 
-bool get_speed_and_name_at(float lat, float lon, int *outSpeed,
-                           char *outStreet, int maxStreetLen)
+bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
+                           int *outSpeed, char *outStreet, int maxStreetLen)
 {
+    static char locked_name[MAX_STREET_NAME];
+    static bool have_lock = false;
+
     /* Reject bogus near-null-island fixes (lat/lon ~ 0) that some NMEA
      * statements emit between real fixes. The device is in Argentina (~-34,-58)
      * and is never legitimately near 0,0 — without this each junk fix triggers a
@@ -235,46 +278,47 @@ bool get_speed_and_name_at(float lat, float lon, int *outSpeed,
     if(fabsf(lat) < 1.0f && fabsf(lon) < 1.0f)
         return false;
 
+    bool use_heading = (speed_kmh >= HEADING_MIN_SPEED_KMH) &&
+                       isfinite(cog_deg) && cog_deg >= 0.0f;
+    const char *preferred = (have_lock && locked_name[0]) ? locked_name : NULL;
+
     int32_t lat_e7 = deg_to_e7(lat);
     int32_t lon_e7 = deg_to_e7(lon);
 
     int32_t base_origin_lat = tile_origin_e7(lat_e7);
     int32_t base_origin_lon = tile_origin_e7(lon_e7);
 
-    float globalBestDist = MAX_STREET_DISTANCE;
+    float globalBestScore = 1e12f;
+    float globalBestDist = 1e12f;
     int   globalBestSpeed = 0;
     char  globalBestName[128] = "";
     bool  foundAnything = false;
 
-    // ---------------------------------------------------------
-    // Compute tile bounds
-    // ---------------------------------------------------------
     double tile_min_lat = base_origin_lat / 1e7;
     double tile_max_lat = (base_origin_lat + TILE_SIZE_E7) / 1e7;
     double tile_min_lon = base_origin_lon / 1e7;
     double tile_max_lon = (base_origin_lon + TILE_SIZE_E7) / 1e7;
 
-    // Distance from point to tile edges
     float d_west  = haversine(lat, lon, lat, tile_min_lon);
     float d_east  = haversine(lat, lon, lat, tile_max_lon);
     float d_south = haversine(lat, lon, tile_min_lat, lon);
     float d_north = haversine(lat, lon, tile_max_lat, lon);
 
-    // ---------------------------------------------------------
-    // 1. Try central tile FIRST
-    // ---------------------------------------------------------
     {
-        float tileBestDist;
+        float tileBestScore, tileBestDist;
         int   tileBestSpeed;
         char  tileBestName[128];
         bool  tileHasData = false;
 
         if (scan_tile_for_match(base_origin_lat, base_origin_lon, lat, lon,
-                                &tileBestDist, &tileBestSpeed, tileBestName, sizeof(tileBestName),
+                                cog_deg, use_heading, preferred,
+                                &tileBestScore, &tileBestDist, &tileBestSpeed,
+                                tileBestName, sizeof(tileBestName),
                                 &tileHasData))
         {
-            if (tileHasData && tileBestDist < globalBestDist) {
-                printf("Data extracted from tile_%ld_%ld.bin\n", filename_coord(base_origin_lat), filename_coord(base_origin_lon));
+            if (tileHasData && tileBestDist <= MAX_STREET_DISTANCE &&
+                tileBestScore < globalBestScore) {
+                globalBestScore = tileBestScore;
                 globalBestDist = tileBestDist;
                 globalBestSpeed = tileBestSpeed;
                 strncpy(globalBestName, tileBestName, sizeof(globalBestName));
@@ -283,66 +327,66 @@ bool get_speed_and_name_at(float lat, float lon, int *outSpeed,
         }
     }
 
-    // Early exit if already good enough
-    if (foundAnything && globalBestDist <= MAX_STREET_DISTANCE)
-        goto DONE;
+    /* Only skip neighbors when we are clearly on a segment (tight geometry). */
+    if (!(foundAnything && globalBestDist <= EARLY_EXIT_DIST_M))
+    {
+        struct {
+            int dx, dy;
+            float min_possible_dist;
+        } neighbors[] = {
+            {-1,  0, d_west},
+            {+1,  0, d_east},
+            { 0, -1, d_south},
+            { 0, +1, d_north},
+            {-1, -1, fminf(d_west,  d_south)},
+            {+1, -1, fminf(d_east,  d_south)},
+            {-1, +1, fminf(d_west,  d_north)},
+            {+1, +1, fminf(d_east,  d_north)},
+        };
 
-    // ---------------------------------------------------------
-    // 2. Scan neighbor tiles with geometric pruning
-    // ---------------------------------------------------------
-    struct {
-        int dx, dy;
-        float min_possible_dist;
-    } neighbors[] = {
-        {-1,  0, d_west},
-        {+1,  0, d_east},
-        { 0, -1, d_south},
-        { 0, +1, d_north},
-        {-1, -1, fminf(d_west,  d_south)},
-        {+1, -1, fminf(d_east,  d_south)},
-        {-1, +1, fminf(d_west,  d_north)},
-        {+1, +1, fminf(d_east,  d_north)},
-    };
+        for (int i = 0; i < 8; i++) {
+            if (neighbors[i].min_possible_dist >= globalBestDist &&
+                neighbors[i].min_possible_dist >= MAX_STREET_DISTANCE)
+                continue;
+            if (foundAnything &&
+                neighbors[i].min_possible_dist >= globalBestScore + STICK_BONUS_M)
+                continue;
 
-    for (int i = 0; i < 8; i++) {
-        // Tile cannot possibly beat current best
-        if (neighbors[i].min_possible_dist >= globalBestDist)
-            continue;
+            int32_t ntx = base_origin_lat + neighbors[i].dx * TILE_SIZE_E7;
+            int32_t nty = base_origin_lon + neighbors[i].dy * TILE_SIZE_E7;
 
-        int32_t ntx = base_origin_lat + neighbors[i].dx * TILE_SIZE_E7;
-        int32_t nty = base_origin_lon + neighbors[i].dy * TILE_SIZE_E7;
+            float tileBestScore, tileBestDist;
+            int   tileBestSpeed;
+            char  tileBestName[128];
+            bool  tileHasData = false;
 
-        float tileBestDist;
-        int   tileBestSpeed;
-        char  tileBestName[128];
-        bool  tileHasData = false;
+            if (!scan_tile_for_match(ntx, nty, lat, lon,
+                                     cog_deg, use_heading, preferred,
+                                     &tileBestScore, &tileBestDist, &tileBestSpeed,
+                                     tileBestName, sizeof(tileBestName),
+                                     &tileHasData))
+                continue;
 
-        if (!scan_tile_for_match(ntx, nty, lat, lon,
-                                 &tileBestDist, &tileBestSpeed,
-                                 tileBestName, sizeof(tileBestName),
-                                 &tileHasData))
-            continue;
-
-        if (tileHasData && tileBestDist < globalBestDist) {
-            printf("Data extracted from tile_%ld_%ld.bin\n", filename_coord(ntx), filename_coord(nty));
-            globalBestDist = tileBestDist;
-            globalBestSpeed = tileBestSpeed;
-            strncpy(globalBestName, tileBestName, sizeof(globalBestName));
-            foundAnything = true;
+            if (tileHasData && tileBestDist <= MAX_STREET_DISTANCE &&
+                tileBestScore < globalBestScore) {
+                globalBestScore = tileBestScore;
+                globalBestDist = tileBestDist;
+                globalBestSpeed = tileBestSpeed;
+                strncpy(globalBestName, tileBestName, sizeof(globalBestName));
+                foundAnything = true;
+            }
         }
     }
 
-DONE:
-    // ---------------------------------------------------------
-    // 3. Final decision
-    // ---------------------------------------------------------
     if (!foundAnything || globalBestDist > MAX_STREET_DISTANCE) {
-        // No tile contains valid streets
-        printf("No street data found in this area.\n");
         *outSpeed = 0;
         outStreet[0] = 0;
         return false;
     }
+
+    strncpy(locked_name, globalBestName, sizeof(locked_name) - 1);
+    locked_name[sizeof(locked_name) - 1] = 0;
+    have_lock = (locked_name[0] != 0);
 
     *outSpeed = globalBestSpeed;
     strncpy(outStreet, globalBestName, maxStreetLen);

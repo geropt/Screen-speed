@@ -102,7 +102,9 @@ void app_main(void)
         {
             static int speed_limit;
             static char street[128];
-            if (get_speed_and_name_at(gps.latitude, gps.longitude, &speed_limit, street, sizeof(street)))
+            float speed_kmh = gps.speed * 3.6f;
+            if (get_speed_and_name_at(gps.latitude, gps.longitude, gps.cog, speed_kmh,
+                                      &speed_limit, street, sizeof(street)))
             {
                 ESP_LOGI(TAG, "Speed limit: %d km/h\n", speed_limit);
                 ESP_LOGI(TAG, "Street: %s\n", street);
@@ -114,7 +116,7 @@ void app_main(void)
                 ESP_LOGI(TAG, "No data for this location.");
                 // set_var_speed_limit_value(0);    // removed as per client's request, retain last known speed limit value
             }
-            int32_t current_speed = (int32_t)(gps.speed * 3.6f); // m/s to km/h
+            int32_t current_speed = (int32_t)speed_kmh;
             ESP_LOGI(TAG, "Current Speed: %ld km/h\n", current_speed);
             set_var_current_speed_value(current_speed);
         }
