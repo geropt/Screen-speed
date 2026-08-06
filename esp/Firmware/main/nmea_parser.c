@@ -548,8 +548,20 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
                 default:
                     break;
                 }
-                /* Check if all statements have been parsed */
-                if (((esp_gps->parsed_statement) )) {//& esp_gps->all_statements) == esp_gps->all_statements) {
+                /* One update per fix cycle, anchored on RMC.
+                 *
+                 * Upstream gates this on `(parsed & all_statements) == all_statements`,
+                 * but all six statements are enabled in sdkconfig while the Ruptela
+                 * only ever sends RMC, GNS and sometimes GGA — so that condition never
+                 * becomes true and the event would never fire. Firing on *any* parsed
+                 * statement (the previous behaviour) went too far the other way: with a
+                 * feed carrying both RMC and GGA it posted twice per second, so every
+                 * fix paid for two full 9-tile sweeps and twice the SD reads.
+                 *
+                 * RMC carries position, speed, course and time — everything the matcher
+                 * consumes. The other fields (altitude, satellites) accumulate in the
+                 * same struct and ride along with the next post. */
+                if (esp_gps->cur_statement == STATEMENT_RMC) {
                     esp_gps->parsed_statement = 0;
                     /* Send signal to notify that GPS information has been updated */
                     esp_event_post_to(esp_gps->event_loop_hdl, ESP_NMEA_EVENT, GPS_UPDATE,
@@ -563,6 +575,22 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
              * GPS_UNKNOWN event for each one only floods the event loop (each post
              * can block up to 100 ms) and spams the log — nothing consumes it. So
              * we no longer post it; this removes a big chunk of the per-fix load. */
+
+            /* Close the statement. Parsing state is otherwise only reset on '$'
+             * (see the start-of-statement branch), and the Ruptela emits
+             * `###IMEI...` lines that carry no '$' at all — they used to inherit
+             * everything from the sentence just finished: cur_statement still
+             * RMC, asterisk still 1 so the CRC was never recomputed, and item_str
+             * still holding the previous checksum digits, which strtol() then read
+             * back as the very CRC it was compared against. The check passed
+             * against itself and a second identical GPS_UPDATE went out for every
+             * fix, doubling the tile sweeps and the SD reads. */
+            esp_gps->cur_statement = STATEMENT_UNKNOWN;
+            esp_gps->asterisk = 0;
+            esp_gps->item_num = 0;
+            esp_gps->item_pos = 0;
+            esp_gps->item_str[0] = '\0';
+            esp_gps->crc = 0;
         }
         /* Other non-space character */
         else {

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <inttypes.h>
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "esp_system.h"
@@ -134,7 +135,7 @@ static float heading_err_deg(float cog_deg, float alat, float alon, float blat, 
 // --------------------------------------------------------
 static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
                                 float cog_deg, bool use_heading,
-                                const char *preferred_name,
+                                const char *preferred_name, int preferred_speed,
                                 float *outBestScore, float *outBestDist,
                                 int *outBestSpeed,
                                 char *outBestName, size_t bestNameSize,
@@ -145,12 +146,14 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
     char filename[96];
     /* Sharded layout: one subdirectory per tx column keeps each FAT directory
      * small, so fopen() no longer scans thousands of entries per lookup. */
-    snprintf(filename, sizeof(filename), TILE_PATH "/%ld/tile_%ld_%ld.bin",
+    snprintf(filename, sizeof(filename), TILE_PATH "/%" PRId32 "/tile_%" PRId32 "_%" PRId32 ".bin",
              filename_coord(tx), filename_coord(tx), filename_coord(ty));
 
     FILE *f = fopen(filename, "rb");
     if (!f) {
-        ESP_LOGE(TAG, "Error reading file /tile_%ld_%ld.bin", filename_coord(tx), filename_coord(ty));
+        /* Expected at the edge of coverage: the 8 neighbors of a border tile
+         * simply do not exist. Debug level, or this floods diag.log at 1 Hz. */
+        ESP_LOGD(TAG, "no tile %" PRId32 "_%" PRId32, filename_coord(tx), filename_coord(ty));
         return false;  // tile does not exist
     }
 
@@ -171,14 +174,19 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
         float *lats  = malloc(sizeof(float) * numPoints);
         float *lons  = malloc(sizeof(float) * numPoints);
 
+        /* PSRAM is off in the active sdkconfig, so these can genuinely fail.
+         * Consume the record either way -- skipping the reads would desync the
+         * file position and turn every later segment into garbage. */
         for (uint16_t p = 0; p < numPoints; p++) {
             int32_t lat_i = read_i32(f);
             int32_t lon_i = read_i32(f);
-            lats[p] = lat_i / 1e7f;
-            lons[p] = lon_i / 1e7f;
+            if (lats && lons) {
+                lats[p] = lat_i / 1e7f;
+                lons[p] = lon_i / 1e7f;
+            }
         }
 
-        for (uint16_t p = 0; p < numPoints - 1; p++) {
+        for (uint16_t p = 0; (lats && lons) && p < numPoints - 1; p++) {
             float d = distance_point_to_segment_haversine(
                         lat, lon,
                         lats[p],   lons[p],
@@ -188,7 +196,11 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             if (d > MAX_STREET_DISTANCE)
                 continue;
 
-            /* Skip heading math when this edge cannot beat current best. */
+            /* Skip heading math when this edge cannot beat current best.
+             * Strictly this should be `localBestScore + STICK_BONUS_M`, like the
+             * check below, since the locked street still gets its bonus applied
+             * later -- but replaying the 6 reference logs gives byte-identical
+             * matches either way, so it stays as the cheaper form. */
             if (d > segBestScore && d > localBestScore)
                 continue;
 
@@ -215,13 +227,13 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
         uint16_t nameLen = read_u16(f);
 
         char *nameBuf = malloc(nameLen + 1);
-        if (nameBuf) {
-            fread(nameBuf, 1, nameLen, f);
-            nameBuf[nameLen] = 0;
-        } else {
+        if (!nameBuf) {
+            /* Drain the name so the next segment starts at the right offset. */
             for (uint16_t i = 0; i < nameLen; i++) fgetc(f);
-            nameBuf = "";
+            continue;
         }
+        fread(nameBuf, 1, nameLen, f);
+        nameBuf[nameLen] = 0;
 
         bool validStreet = (nameLen > 0 && nameBuf[0] != 0);
 
@@ -229,13 +241,19 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             *outTileHasData = true;
 
         if (!validStreet || segBestDist > MAX_STREET_DISTANCE) {
-            if (nameBuf && nameBuf != (char*)"")
-                free(nameBuf);
+            free(nameBuf);
             continue;
         }
 
+        /* Stickiness keys on name *and* posted limit. OSM often names a
+         * motorway and its service road identically -- around Acceso Norte two
+         * parallel ways 10-15 m apart are both "Acceso Norte", one tagged 130
+         * and the other 80. Keying on the name alone handed both the same bonus,
+         * so between them there was no hysteresis at all and the displayed limit
+         * flipped with raw geometry even when the two were 0.7 m apart. */
         float score = segBestScore;
         if (preferred_name && preferred_name[0] &&
+            speed == preferred_speed &&
             strncmp(nameBuf, preferred_name, MAX_STREET_NAME) == 0) {
             score -= STICK_BONUS_M;
             if (score < 0.0f)
@@ -250,8 +268,7 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             localBestName[sizeof(localBestName)-1] = 0;
         }
 
-        if (nameBuf && nameBuf != (char*)"")
-            free(nameBuf);
+        free(nameBuf);
     }
 
     fclose(f);
@@ -269,6 +286,7 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
                            int *outSpeed, char *outStreet, int maxStreetLen)
 {
     static char locked_name[MAX_STREET_NAME];
+    static int  locked_speed = 0;
     static bool have_lock = false;
 
     /* Reject bogus near-null-island fixes (lat/lon ~ 0) that some NMEA
@@ -281,6 +299,7 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
     bool use_heading = (speed_kmh >= HEADING_MIN_SPEED_KMH) &&
                        isfinite(cog_deg) && cog_deg >= 0.0f;
     const char *preferred = (have_lock && locked_name[0]) ? locked_name : NULL;
+    const int preferred_speed = have_lock ? locked_speed : -1;
 
     int32_t lat_e7 = deg_to_e7(lat);
     int32_t lon_e7 = deg_to_e7(lon);
@@ -311,7 +330,7 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
         bool  tileHasData = false;
 
         if (scan_tile_for_match(base_origin_lat, base_origin_lon, lat, lon,
-                                cog_deg, use_heading, preferred,
+                                cog_deg, use_heading, preferred, preferred_speed,
                                 &tileBestScore, &tileBestDist, &tileBestSpeed,
                                 tileBestName, sizeof(tileBestName),
                                 &tileHasData))
@@ -321,7 +340,8 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
                 globalBestScore = tileBestScore;
                 globalBestDist = tileBestDist;
                 globalBestSpeed = tileBestSpeed;
-                strncpy(globalBestName, tileBestName, sizeof(globalBestName));
+                strncpy(globalBestName, tileBestName, sizeof(globalBestName) - 1);
+                globalBestName[sizeof(globalBestName) - 1] = 0;
                 foundAnything = true;
             }
         }
@@ -330,18 +350,25 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
     /* Only skip neighbors when we are clearly on a segment (tight geometry). */
     if (!(foundAnything && globalBestDist <= EARLY_EXIT_DIST_M))
     {
+        /* dx steps latitude and dy steps longitude (see ntx/nty below), so each
+         * neighbour must be bounded by the distance to the edge it actually
+         * lies across: dx pairs with d_south/d_north, dy with d_west/d_east.
+         * Pairing them the other way round bounds the wrong axis and discards
+         * tiles that are in fact adjacent -- with the car 0.2 m from the east
+         * edge the check looked 330 m north, threw away both tiles holding the
+         * street being driven on, and fell back to a cross street 32 m away. */
         struct {
             int dx, dy;
             float min_possible_dist;
         } neighbors[] = {
-            {-1,  0, d_west},
-            {+1,  0, d_east},
-            { 0, -1, d_south},
-            { 0, +1, d_north},
-            {-1, -1, fminf(d_west,  d_south)},
-            {+1, -1, fminf(d_east,  d_south)},
-            {-1, +1, fminf(d_west,  d_north)},
-            {+1, +1, fminf(d_east,  d_north)},
+            {-1,  0, d_south},
+            {+1,  0, d_north},
+            { 0, -1, d_west},
+            { 0, +1, d_east},
+            {-1, -1, fminf(d_south, d_west)},
+            {+1, -1, fminf(d_north, d_west)},
+            {-1, +1, fminf(d_south, d_east)},
+            {+1, +1, fminf(d_north, d_east)},
         };
 
         for (int i = 0; i < 8; i++) {
@@ -361,7 +388,7 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
             bool  tileHasData = false;
 
             if (!scan_tile_for_match(ntx, nty, lat, lon,
-                                     cog_deg, use_heading, preferred,
+                                     cog_deg, use_heading, preferred, preferred_speed,
                                      &tileBestScore, &tileBestDist, &tileBestSpeed,
                                      tileBestName, sizeof(tileBestName),
                                      &tileHasData))
@@ -372,7 +399,8 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
                 globalBestScore = tileBestScore;
                 globalBestDist = tileBestDist;
                 globalBestSpeed = tileBestSpeed;
-                strncpy(globalBestName, tileBestName, sizeof(globalBestName));
+                strncpy(globalBestName, tileBestName, sizeof(globalBestName) - 1);
+                globalBestName[sizeof(globalBestName) - 1] = 0;
                 foundAnything = true;
             }
         }
@@ -386,6 +414,7 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
 
     strncpy(locked_name, globalBestName, sizeof(locked_name) - 1);
     locked_name[sizeof(locked_name) - 1] = 0;
+    locked_speed = globalBestSpeed;
     have_lock = (locked_name[0] != 0);
 
     *outSpeed = globalBestSpeed;

@@ -22,7 +22,12 @@
 
 /* Map-match tuning: heading + stickiness (meters / degrees / km/h). */
 #define HEADING_WEIGHT_M_PER_DEG  0.20f  /* 45° ≈ +9 m score */
-#define STICK_BONUS_M             12.0f  /* prefer last locked street */
+/* Switch margin: how much better a challenger must score to take over the
+ * display. Dual carriageways can run 6-8 m apart (Acceso Norte / its colectora),
+ * so 12 m was wider than the real separation and held the colectora on screen
+ * for 26 s after merging onto the 130 lanes. Measured over 6 real logs the good
+ * plateau is 3-6 m; 5 sits in the middle of it. */
+#define STICK_BONUS_M             5.0f   /* prefer last locked street */
 #define HEADING_MIN_SPEED_KMH     8.0f   /* COG unreliable when slower */
 #define EARLY_EXIT_DIST_M         15.0f  /* only skip neighbors if this close */
 
