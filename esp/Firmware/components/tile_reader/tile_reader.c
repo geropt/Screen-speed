@@ -139,7 +139,8 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
                                 float *outBestScore, float *outBestDist,
                                 int *outBestSpeed,
                                 char *outBestName, size_t bestNameSize,
-                                bool *outTileHasData)
+                                bool *outTileHasData,
+                                float *outAnonDist, int *outAnonSpeed)
 {
     *outTileHasData = false;
 
@@ -162,6 +163,13 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
     float localBestDist = 1e12f;
     int   localBestSpeed = 0;
     char  localBestName[128] = "";
+    /* Closest way that carries a posted limit but no name -- OSM splits
+     * carriageways and the resulting segments often keep only `ref`. At the
+     * General Paz / Acceso Norte junction the roadway actually being driven sits
+     * 2.5 m away with maxspeed=100 and no name, while the nearest *named* way is
+     * 35 m off, so the name filter alone was throwing away the right answer. */
+    float localAnonDist = 1e12f;
+    int   localAnonSpeed = 0;
     const float max_hdg_penalty = use_heading ? (HEADING_WEIGHT_M_PER_DEG * 90.0f) : 0.0f;
 
     for (uint32_t s = 0; s < segCount; s++) {
@@ -240,6 +248,12 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
         if (validStreet)
             *outTileHasData = true;
 
+        if (!validStreet && speed > 0 && segBestDist <= MAX_STREET_DISTANCE &&
+            segBestDist < localAnonDist) {
+            localAnonDist = segBestDist;
+            localAnonSpeed = speed;
+        }
+
         if (!validStreet || segBestDist > MAX_STREET_DISTANCE) {
             free(nameBuf);
             continue;
@@ -276,6 +290,8 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
     *outBestScore = localBestScore;
     *outBestDist = localBestDist;
     *outBestSpeed = localBestSpeed;
+    *outAnonDist = localAnonDist;
+    *outAnonSpeed = localAnonSpeed;
     strncpy(outBestName, localBestName, bestNameSize);
     outBestName[bestNameSize-1] = 0;
 
@@ -312,6 +328,8 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
     int   globalBestSpeed = 0;
     char  globalBestName[128] = "";
     bool  foundAnything = false;
+    float globalAnonDist = 1e12f;
+    int   globalAnonSpeed = 0;
 
     double tile_min_lat = base_origin_lat / 1e7;
     double tile_max_lat = (base_origin_lat + TILE_SIZE_E7) / 1e7;
@@ -328,13 +346,19 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
         int   tileBestSpeed;
         char  tileBestName[128];
         bool  tileHasData = false;
+        float tileAnonDist = 1e12f;
+        int   tileAnonSpeed = 0;
 
         if (scan_tile_for_match(base_origin_lat, base_origin_lon, lat, lon,
                                 cog_deg, use_heading, preferred, preferred_speed,
                                 &tileBestScore, &tileBestDist, &tileBestSpeed,
                                 tileBestName, sizeof(tileBestName),
-                                &tileHasData))
+                                &tileHasData, &tileAnonDist, &tileAnonSpeed))
         {
+            if (tileAnonDist < globalAnonDist) {
+                globalAnonDist = tileAnonDist;
+                globalAnonSpeed = tileAnonSpeed;
+            }
             if (tileHasData && tileBestDist <= MAX_STREET_DISTANCE &&
                 tileBestScore < globalBestScore) {
                 globalBestScore = tileBestScore;
@@ -386,13 +410,20 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
             int   tileBestSpeed;
             char  tileBestName[128];
             bool  tileHasData = false;
+            float tileAnonDist = 1e12f;
+            int   tileAnonSpeed = 0;
 
             if (!scan_tile_for_match(ntx, nty, lat, lon,
                                      cog_deg, use_heading, preferred, preferred_speed,
                                      &tileBestScore, &tileBestDist, &tileBestSpeed,
                                      tileBestName, sizeof(tileBestName),
-                                     &tileHasData))
+                                     &tileHasData, &tileAnonDist, &tileAnonSpeed))
                 continue;
+
+            if (tileAnonDist < globalAnonDist) {
+                globalAnonDist = tileAnonDist;
+                globalAnonSpeed = tileAnonSpeed;
+            }
 
             if (tileHasData && tileBestDist <= MAX_STREET_DISTANCE &&
                 tileBestScore < globalBestScore) {
@@ -407,6 +438,18 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
     }
 
     if (!foundAnything || globalBestDist > MAX_STREET_DISTANCE) {
+        /* No named way in range, but an unnamed one may still be right under us
+         * -- on the pana2 run the car spends 12 s on a nameless 60 km/h link
+         * whose closest *named* neighbour is 77 m away, past the cutoff. The old
+         * code returned false there and offline_maps.c deliberately holds the
+         * previous value, so the screen kept showing 130 on a 60 road. Report
+         * the limit and keep the last street name rather than blanking it. */
+        if (globalAnonSpeed > 0) {
+            *outSpeed = globalAnonSpeed;
+            strncpy(outStreet, locked_name, maxStreetLen);
+            outStreet[maxStreetLen - 1] = 0;
+            return true;
+        }
         *outSpeed = 0;
         outStreet[0] = 0;
         return false;
@@ -417,7 +460,16 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
     locked_speed = globalBestSpeed;
     have_lock = (locked_name[0] != 0);
 
+    /* The name always comes from the named way, so the display never blanks.
+     * The limit comes from whichever way we are actually on: if an unnamed one
+     * is closer by more than the switch margin, it wins. Replayed against the
+     * SD's own tiles this takes fixes whose limit came from >25 m away from 155
+     * to 85, and the share of fixes showing a limit that is not the nearest
+     * way's from 12.6% to 8.1%, for 13 more limit changes in 46 min. */
     *outSpeed = globalBestSpeed;
+    if (globalAnonSpeed > 0 && globalAnonDist + STICK_BONUS_M < globalBestDist) {
+        *outSpeed = globalAnonSpeed;
+    }
     strncpy(outStreet, globalBestName, maxStreetLen);
     outStreet[maxStreetLen - 1] = 0;
     return true;

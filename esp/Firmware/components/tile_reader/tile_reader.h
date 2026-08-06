@@ -25,9 +25,11 @@
 /* Switch margin: how much better a challenger must score to take over the
  * display. Dual carriageways can run 6-8 m apart (Acceso Norte / its colectora),
  * so 12 m was wider than the real separation and held the colectora on screen
- * for 26 s after merging onto the 130 lanes. Measured over 6 real logs the good
- * plateau is 3-6 m; 5 sits in the middle of it. */
-#define STICK_BONUS_M             5.0f   /* prefer last locked street */
+ * for 26 s after merging onto the 130 lanes. Replayed against the tile set that
+ * is actually on the SD card, 4 m drops that lag to zero -- the display follows
+ * the merge on the same fix -- while 5 m still trailed by 8 s. Below 3 m the
+ * limit starts chattering without getting any more accurate. */
+#define STICK_BONUS_M             4.0f   /* prefer last locked street */
 #define HEADING_MIN_SPEED_KMH     8.0f   /* COG unreliable when slower */
 #define EARLY_EXIT_DIST_M         15.0f  /* only skip neighbors if this close */
 
