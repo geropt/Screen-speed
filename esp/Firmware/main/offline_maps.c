@@ -1,5 +1,7 @@
 #include "sd_manager.h"
 #include "tile_reader.h"
+#include "tile_cache.h"
+#include "esp_heap_caps.h"
 #include "waveshare_amoled_lcd_port.h"
 #include "dynamic.h"
 #include "splash.h"
@@ -117,8 +119,25 @@ void app_main(void)
                 // set_var_speed_limit_value(0);    // removed as per client's request, retain last known speed limit value
             }
             int32_t current_speed = (int32_t)speed_kmh;
-            ESP_LOGI(TAG, "Current Speed: %ld km/h\n", current_speed);
+            ESP_LOGI(TAG, "Current Speed: %" PRId32 " km/h\n", current_speed);
             set_var_current_speed_value(current_speed);
+
+            /* Tile cache health, once a minute. A warm cache should sit well
+             * above 95% hits: a whole trip only touches 42-128 distinct tiles.
+             * If `bytes` keeps climbing instead of levelling off, the LRU is not
+             * evicting. */
+            static uint32_t fix_count;
+            if ((++fix_count % 60) == 0) {
+                uint32_t hits, misses, entries;
+                size_t bytes;
+                tile_cache_stats(&hits, &misses, &bytes, &entries);
+                uint32_t total = hits + misses;
+                ESP_LOGI(TAG, "tiles: %" PRIu32 "%% hits (%" PRIu32 "/%" PRIu32
+                              "), %u KB in %" PRIu32 " entries, PSRAM free %u KB",
+                         total ? (hits * 100 / total) : 0, hits, total,
+                         (unsigned)(bytes / 1024), entries,
+                         (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+            }
         }
     }
 }

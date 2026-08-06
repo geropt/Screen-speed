@@ -9,33 +9,66 @@
 #include "esp_vfs_fat.h"
 #include "esp_system.h"
 #include "tile_config.h"
+#include "tile_cache.h"
 
 const static char *TAG = "TILE_READER";
 
-// ----------------- Binary read helpers -----------------
-static uint32_t read_u32(FILE *f) {
-    uint8_t b[4];
-    fread(b, 1, 4, f);
-    return (uint32_t)b[0] |
-           ((uint32_t)b[1] << 8) |
-           ((uint32_t)b[2] << 16) |
-           ((uint32_t)b[3] << 24);
+/* ---------- Binary reader over a cached tile ----------
+ * Tiles now arrive as one PSRAM buffer instead of a FILE *, so bounds checking
+ * is ours to do. Every read goes through the cursor; once it runs past the end
+ * `ok` latches false and the caller stops. Values stay byte-assembled because
+ * the records are packed and nothing guarantees alignment. */
+typedef struct {
+    const uint8_t *p;
+    const uint8_t *end;
+    bool ok;
+} tile_rd_t;
+
+static inline bool rd_take(tile_rd_t *r, size_t n)
+{
+    if (!r->ok || (size_t)(r->end - r->p) < n) {
+        r->ok = false;
+        return false;
+    }
+    return true;
 }
 
-static uint16_t read_u16(FILE *f) {
-    uint8_t b[2];
-    fread(b, 1, 2, f);
+static uint32_t rd_u32(tile_rd_t *r)
+{
+    if (!rd_take(r, 4)) return 0;
+    const uint8_t *b = r->p;
+    r->p += 4;
+    return (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+           ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+
+static uint16_t rd_u16(tile_rd_t *r)
+{
+    if (!rd_take(r, 2)) return 0;
+    const uint8_t *b = r->p;
+    r->p += 2;
     return (uint16_t)b[0] | ((uint16_t)b[1] << 8);
 }
 
-static int32_t read_i32(FILE *f) {
-    uint8_t b[4];
-    fread(b, 1, 4, f);
-    return  (int32_t)b[0] |
-           ((int32_t)b[1] << 8) |
-           ((int32_t)b[2] << 16) |
-           ((int32_t)b[3] << 24);
+/* Borrow n bytes in place and advance; NULL when the tile is truncated. */
+static const uint8_t *rd_block(tile_rd_t *r, size_t n)
+{
+    if (!rd_take(r, n)) return NULL;
+    const uint8_t *b = r->p;
+    r->p += n;
+    return b;
 }
+
+/* Points are stored as pairs of little-endian int32 in 1e7 fixed point. */
+static inline float pt_at(const uint8_t *pts, uint16_t idx, int which)
+{
+    const uint8_t *b = pts + (size_t)idx * 8 + (which ? 4 : 0);
+    int32_t v = (int32_t)((uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+                          ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24));
+    return v / 1e7f;
+}
+#define PT_LAT(pts, i) pt_at((pts), (i), 0)
+#define PT_LON(pts, i) pt_at((pts), (i), 1)
 
 // ------------------ tile index ------------------
 static inline int32_t deg_to_e7(double deg) {
@@ -144,21 +177,18 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
 {
     *outTileHasData = false;
 
-    char filename[96];
-    /* Sharded layout: one subdirectory per tx column keeps each FAT directory
-     * small, so fopen() no longer scans thousands of entries per lookup. */
-    snprintf(filename, sizeof(filename), TILE_PATH "/%" PRId32 "/tile_%" PRId32 "_%" PRId32 ".bin",
-             filename_coord(tx), filename_coord(tx), filename_coord(ty));
-
-    FILE *f = fopen(filename, "rb");
-    if (!f) {
+    size_t tileLen = 0;
+    const uint8_t *tileBuf = tile_cache_get(tx, ty, &tileLen);
+    if (!tileBuf) {
         /* Expected at the edge of coverage: the 8 neighbors of a border tile
-         * simply do not exist. Debug level, or this floods diag.log at 1 Hz. */
+         * simply do not exist. The cache remembers that, so this costs nothing
+         * after the first lookup. */
         ESP_LOGD(TAG, "no tile %" PRId32 "_%" PRId32, filename_coord(tx), filename_coord(ty));
         return false;  // tile does not exist
     }
 
-    uint32_t segCount = read_u32(f);
+    tile_rd_t rd = { tileBuf, tileBuf + tileLen, true };
+    uint32_t segCount = rd_u32(&rd);
     float localBestScore = 1e12f;
     float localBestDist = 1e12f;
     int   localBestSpeed = 0;
@@ -174,31 +204,26 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
 
     for (uint32_t s = 0; s < segCount; s++) {
 
-        uint16_t numPoints = read_u16(f);
+        uint16_t numPoints = rd_u16(&rd);
 
         float segBestScore = 1e12f;
         float segBestDist = 1e12f;
 
-        float *lats  = malloc(sizeof(float) * numPoints);
-        float *lons  = malloc(sizeof(float) * numPoints);
+        /* The points stay where they are in the cached buffer and get decoded on
+         * demand. That removes the two per-segment mallocs the file-based reader
+         * needed -- and with them the whole out-of-memory path. */
+        const uint8_t *pts = rd_block(&rd, (size_t)numPoints * 8);
+        uint16_t speed = rd_u16(&rd);
+        uint16_t nameLen = rd_u16(&rd);
+        const uint8_t *name = rd_block(&rd, nameLen);
+        if (!rd.ok)
+            break;   /* truncated tile: stop, whatever we already scored stands */
 
-        /* PSRAM is off in the active sdkconfig, so these can genuinely fail.
-         * Consume the record either way -- skipping the reads would desync the
-         * file position and turn every later segment into garbage. */
-        for (uint16_t p = 0; p < numPoints; p++) {
-            int32_t lat_i = read_i32(f);
-            int32_t lon_i = read_i32(f);
-            if (lats && lons) {
-                lats[p] = lat_i / 1e7f;
-                lons[p] = lon_i / 1e7f;
-            }
-        }
-
-        for (uint16_t p = 0; (lats && lons) && p < numPoints - 1; p++) {
+        for (uint16_t p = 0; p + 1 < numPoints; p++) {
             float d = distance_point_to_segment_haversine(
                         lat, lon,
-                        lats[p],   lons[p],
-                        lats[p+1], lons[p+1]
+                        PT_LAT(pts, p),   PT_LON(pts, p),
+                        PT_LAT(pts, p+1), PT_LON(pts, p+1)
                     );
 
             if (d > MAX_STREET_DISTANCE)
@@ -216,7 +241,8 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             if (use_heading) {
                 if (d + max_hdg_penalty < segBestScore || d + max_hdg_penalty < localBestScore + STICK_BONUS_M) {
                     sc = d + HEADING_WEIGHT_M_PER_DEG * heading_err_deg(
-                            cog_deg, lats[p], lons[p], lats[p+1], lons[p+1]);
+                            cog_deg, PT_LAT(pts, p), PT_LON(pts, p),
+                            PT_LAT(pts, p+1), PT_LON(pts, p+1));
                 } else {
                     continue;
                 }
@@ -228,22 +254,7 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             }
         }
 
-        free(lats);
-        free(lons);
-
-        uint16_t speed = read_u16(f);
-        uint16_t nameLen = read_u16(f);
-
-        char *nameBuf = malloc(nameLen + 1);
-        if (!nameBuf) {
-            /* Drain the name so the next segment starts at the right offset. */
-            for (uint16_t i = 0; i < nameLen; i++) fgetc(f);
-            continue;
-        }
-        fread(nameBuf, 1, nameLen, f);
-        nameBuf[nameLen] = 0;
-
-        bool validStreet = (nameLen > 0 && nameBuf[0] != 0);
+        bool validStreet = (nameLen > 0 && name && name[0] != 0);
 
         if (validStreet)
             *outTileHasData = true;
@@ -254,10 +265,8 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             localAnonSpeed = speed;
         }
 
-        if (!validStreet || segBestDist > MAX_STREET_DISTANCE) {
-            free(nameBuf);
+        if (!validStreet || segBestDist > MAX_STREET_DISTANCE)
             continue;
-        }
 
         /* Stickiness keys on name *and* posted limit. OSM often names a
          * motorway and its service road identically -- around Acceso Norte two
@@ -266,9 +275,12 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
          * so between them there was no hysteresis at all and the displayed limit
          * flipped with raw geometry even when the two were 0.7 m apart. */
         float score = segBestScore;
+        /* The name lives in the cached buffer and is not NUL terminated, so the
+         * match has to be length-exact rather than a plain strncmp. */
         if (preferred_name && preferred_name[0] &&
             speed == preferred_speed &&
-            strncmp(nameBuf, preferred_name, MAX_STREET_NAME) == 0) {
+            strncmp(preferred_name, (const char *)name, nameLen) == 0 &&
+            preferred_name[nameLen] == '\0') {
             score -= STICK_BONUS_M;
             if (score < 0.0f)
                 score = 0.0f;
@@ -278,14 +290,13 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
             localBestScore = score;
             localBestDist = segBestDist;
             localBestSpeed = speed;
-            strncpy(localBestName, nameBuf, sizeof(localBestName)-1);
-            localBestName[sizeof(localBestName)-1] = 0;
+            size_t n = nameLen < sizeof(localBestName) - 1 ? nameLen
+                                                           : sizeof(localBestName) - 1;
+            memcpy(localBestName, name, n);
+            localBestName[n] = 0;
         }
 
-        free(nameBuf);
     }
-
-    fclose(f);
 
     *outBestScore = localBestScore;
     *outBestDist = localBestDist;
@@ -304,6 +315,8 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
     static char locked_name[MAX_STREET_NAME];
     static int  locked_speed = 0;
     static bool have_lock = false;
+    /* Whether the limit currently on screen came from an unnamed way. */
+    static bool locked_anon = false;
 
     /* Reject bogus near-null-island fixes (lat/lon ~ 0) that some NMEA
      * statements emit between real fixes. The device is in Argentina (~-34,-58)
@@ -446,6 +459,7 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
          * the limit and keep the last street name rather than blanking it. */
         if (globalAnonSpeed > 0) {
             *outSpeed = globalAnonSpeed;
+            locked_anon = true;
             strncpy(outStreet, locked_name, maxStreetLen);
             outStreet[maxStreetLen - 1] = 0;
             return true;
@@ -465,11 +479,21 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
      * is closer by more than the switch margin, it wins. Replayed against the
      * SD's own tiles this takes fixes whose limit came from >25 m away from 155
      * to 85, and the share of fixes showing a limit that is not the nearest
-     * way's from 12.6% to 8.1%, for 13 more limit changes in 46 min. */
-    *outSpeed = globalBestSpeed;
-    if (globalAnonSpeed > 0 && globalAnonDist + STICK_BONUS_M < globalBestDist) {
-        *outSpeed = globalAnonSpeed;
-    }
+     * way's from 12.6% to 8.1%, for 13 more limit changes in 46 min.
+     *
+     * The choice needs its own hysteresis, for the same reason the street name
+     * does. A fixed threshold flapped: on General Paz an unnamed 60 way sits
+     * 0.04-0.45 m away while the named 80 centreline drifts between 1.7 and
+     * 7.3 m, so `anon + 4 < named` went true, false, true on consecutive fixes
+     * and the display bounced 60/80/60 with the car sitting on the same asphalt.
+     * Widening the band in the direction of whatever is already shown costs
+     * nothing in accuracy (7.1% either way over the six logs) and drops limit
+     * changes from 46 to 40. */
+    const float anon_margin = locked_anon ? -STICK_BONUS_M : STICK_BONUS_M;
+    bool use_anon = (globalAnonSpeed > 0 &&
+                     globalAnonDist + anon_margin < globalBestDist);
+    *outSpeed = use_anon ? globalAnonSpeed : globalBestSpeed;
+    locked_anon = use_anon;
     strncpy(outStreet, globalBestName, maxStreetLen);
     outStreet[maxStreetLen - 1] = 0;
     return true;
