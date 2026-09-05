@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "esp_err.h"
 #include "map_match.h"
 
 #ifdef __cplusplus
@@ -34,8 +35,28 @@ typedef struct {
     uint32_t io_errors;
 } map_store_stats_t;
 
+/** Qué backend resuelve las celdas. */
+typedef enum {
+    MAP_BACKEND_DIRECTORY = 0,  /**< un archivo por celda en la tarjeta   */
+    MAP_BACKEND_CAPSULE         /**< una cápsula consultada por rangos    */
+} map_backend_t;
+
 /** Inicializa. Idempotente. Arranca sin mapas disponibles. */
 void map_store_init(void);
+
+/**
+ * @brief Elige el backend de lectura.
+ *
+ * Los dos entregan **los mismos bytes** para la misma celda: la equivalencia está
+ * probada en host contra el golden de P00. Cambiar de backend incrementa la
+ * generación, porque el contenido puede no ser el mismo mapa.
+ *
+ * @param capsule_path ruta de la cápsula cuando el backend es MAP_BACKEND_CAPSULE
+ */
+esp_err_t map_store_set_backend(map_backend_t backend, const char *capsule_path);
+
+/** @return backend en uso. */
+map_backend_t map_store_backend(void);
 
 /**
  * @brief Declara que hay mapas usables e incrementa la generación.
