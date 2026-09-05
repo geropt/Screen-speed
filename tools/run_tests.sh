@@ -136,10 +136,12 @@ if [ "$WITH_BUILD" -eq 1 ]; then
             # shellcheck disable=SC1090
             . "$IDF_ACTIVATE" >/dev/null 2>&1 || return 1
             # Directorio y sdkconfig aparte: no se toca el build ni la configuración
-            # del usuario.
+            # del usuario. El directorio se crea antes porque idf.py no lo hace para
+            # el archivo de sdkconfig, sólo para el de build.
+            mkdir -p esp/Firmware/build_ci || return 1
             ( cd esp/Firmware && \
               python "$IDF_PATH/tools/idf.py" -B build_ci \
-                  -D SDKCONFIG="$PWD/build_ci/sdkconfig.ci" build )
+                  -D SDKCONFIG="build_ci/sdkconfig.ci" build )
         }
         run_suite "Build del firmware (ESP-IDF)" build_firmware
     else
