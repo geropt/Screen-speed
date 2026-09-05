@@ -51,7 +51,14 @@ static void update_overspeed_ring(bool overspeed)
 
 void set_street_name(const char *street_name)
 {
+    // lv_label_set_text toca la lista de objetos de LVGL, que no es thread-safe, y
+    // esta funcion se llama desde la tarea principal mientras la tarea de LVGL
+    // corre lv_timer_handler(). Sin el mutex las dos escriben el mismo widget.
+    // El resto de update_overspeed_ring ya lo tomaba; esta ruta era la excepcion.
+    if (!lvgl_lock(-1))
+        return;
     lv_label_set_text(objects.street_name, street_name);
+    lvgl_unlock();
 }
 
 void calculate_threshold(void)

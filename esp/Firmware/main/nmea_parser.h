@@ -217,6 +217,33 @@ esp_err_t nmea_parser_remove_handler(nmea_parser_handle_t nmea_hdl, esp_event_ha
  */
 esp_err_t nmea_parser_set_baud(nmea_parser_handle_t nmea_hdl, uint32_t baud_rate);
 
+/* --- Señales del canal transparente del Ruptela (P02b) ---
+ *
+ * El enlace transporta, mezclados, sentencias NMEA, records binarios de IO y el
+ * marcador `###IMEI`. El parser los separa y entrega cada señal por su propio
+ * callback, con argumentos primitivos: quien recibe NO debe tocar UI, SD ni red,
+ * porque estos callbacks corren en la tarea que drena la UART.
+ */
+
+/** IO 409: estado de ignición. */
+typedef void (*nmea_ignition_cb_t)(void *ctx, bool ignition_on);
+/** IO 418: estado de GPRS del tracker. */
+typedef void (*nmea_gprs_cb_t)(void *ctx, bool gprs_up);
+/** Marcador `###IMEI`: identidad del tracker. */
+typedef void (*nmea_imei_cb_t)(void *ctx, const char *imei);
+
+/**
+ * @brief Registra los consumidores de las señales del canal transparente.
+ *
+ * Cualquiera puede ser NULL. Llamar antes de que el enlace tenga tráfico, o
+ * aceptar que se pierdan las señales que lleguen mientras se registra.
+ */
+esp_err_t nmea_parser_set_signal_handlers(nmea_parser_handle_t nmea_hdl,
+                                         nmea_ignition_cb_t ignition_cb,
+                                         nmea_gprs_cb_t gprs_cb,
+                                         nmea_imei_cb_t imei_cb,
+                                         void *ctx);
+
 /**
  * @brief Get the UART baud rate currently in use
  *
