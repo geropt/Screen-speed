@@ -18,7 +18,7 @@ REPO_ROOT   := $(abspath $(FW_ROOT)/../..)
 # find on the SD card. Override with `make DATASET_ROOT=/path test`.
 DATASET_ROOT ?= $(REPO_ROOT)/python
 
-TILE_SRC := $(FW_ROOT)/components/tile_reader
+MATCH_SRC := $(FW_ROOT)/components/map_match
 RES_SRC  := $(FW_ROOT)/components/res_metrics
 VS_SRC   := $(FW_ROOT)/components/vehicle_state
 UI_SRC   := $(FW_ROOT)/components/ui_model
@@ -26,20 +26,20 @@ UI_SRC   := $(FW_ROOT)/components/ui_model
 SHARED_SRC := $(abspath $(FW_ROOT)/../components/ruptela_framing)
 SHIM_SRC := $(CURDIR)/host_shim
 
-INCLUDES := -I$(SHIM_SRC) -I$(TILE_SRC) -I$(RES_SRC)/include -I$(VS_SRC)/include -I$(UI_SRC)/include \
+INCLUDES := -I$(SHIM_SRC) -I$(MATCH_SRC)/include -I$(RES_SRC)/include -I$(VS_SRC)/include -I$(UI_SRC)/include \
             -I$(SHARED_SRC)/include -I$(CURDIR)
-DEFINES  := -DHOST_MOUNT_POINT='"$(DATASET_ROOT)"' \
+DEFINES  := -DDATASET_DIR='"$(DATASET_ROOT)"' \
             -DGOLDEN_PATH='"fixtures/tile_reader_baseline.golden"'
 
-TESTS := test_tile_reader_baseline test_res_stats test_ruptela_framing \
+TESTS := test_map_match_equivalence test_res_stats test_ruptela_framing \
          test_vehicle_state test_ui_model
 
-.PHONY: test all update-golden clean check-dataset
+.PHONY: test all clean check-dataset
 
 all: $(TESTS)
 
 test: check-dataset $(TESTS)
-	./test_tile_reader_baseline
+	./test_map_match_equivalence
 	./test_res_stats
 	./test_ruptela_framing
 	./test_vehicle_state
@@ -51,13 +51,13 @@ check-dataset:
 	  echo "       regenerate it with python/extract_tiles.py or pass DATASET_ROOT=..."; \
 	  exit 1; }
 
-update-golden: $(TESTS)
-	./test_tile_reader_baseline --update
+# El golden de P00 es la referencia de equivalencia: NO se regenera desde acá.
+# Una diferencia significa que la extracción cambió el comportamiento.
 
-test_tile_reader_baseline: test_tile_reader_baseline.c \
-                           $(TILE_SRC)/tile_reader.c \
-                           $(TILE_SRC)/tile_cache.c \
-                           $(SHIM_SRC)/host_shim.c
+# Replay de equivalencia: matcher extraído contra el golden congelado en P00.
+# La fuente de candidatos del test lee el directorio del dataset, así que el
+# matcher se ejercita sin la caché del dispositivo.
+test_map_match_equivalence: test_map_match_equivalence.c $(MATCH_SRC)/map_match.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) $(DEFINES) -o $@ $^ -lm
 
 # res_stats es C puro sin dependencias de ESP-IDF: no necesita shims.

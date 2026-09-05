@@ -1,5 +1,4 @@
 #include "tile_cache.h"
-#include "tile_reader.h"
 #include "tile_config.h"
 
 #include <stdio.h>

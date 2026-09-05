@@ -1,17 +1,13 @@
-#include "tile_reader.h"
-#include <stdio.h>
+#include "map_match.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
-#include <inttypes.h>
-#include "esp_log.h"
-#include "esp_vfs_fat.h"
-#include "esp_system.h"
 #include "tile_config.h"
-#include "tile_cache.h"
 
-const static char *TAG = "TILE_READER";
+/* Sin esp_log: este componente compila igual en el host. Lo que antes se logueaba
+ * por tile ausente ahora se cuenta en el resultado (`tiles_absent`), que además es
+ * observable desde una prueba. */
 
 /* ---------- Binary reader over a cached tile ----------
  * Tiles now arrive as one PSRAM buffer instead of a FILE *, so bounds checking
@@ -87,10 +83,8 @@ static inline int32_t tile_origin_e7(int32_t coord_e7) {
     return floor_div(coord_e7, TILE_SIZE_E7) * TILE_SIZE_E7;
 }
 
-static inline int32_t filename_coord(int32_t origin_e7)
-{
-    return origin_e7 / FILENAME_SCALE;
-}
+/* `filename_coord()` se fue con el almacenamiento: construir nombres de archivo es
+ * de map_store, no de la geometría. */
 
 static float haversine(float lat1, float lon1, float lat2, float lon2)
 {
@@ -166,7 +160,8 @@ static float heading_err_deg(float cog_deg, float alat, float alon, float blat, 
 // --------------------------------------------------------
 //         MAIN FUNCTION (called by the rest of app)
 // --------------------------------------------------------
-static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
+static bool scan_tile_for_match(const map_tile_source_t *src, map_result_t *stats,
+                                int32_t tx, int32_t ty, float lat, float lon,
                                 float cog_deg, bool use_heading,
                                 const char *preferred_name, int preferred_speed,
                                 float *outBestScore, float *outBestDist,
@@ -178,12 +173,13 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
     *outTileHasData = false;
 
     size_t tileLen = 0;
-    const uint8_t *tileBuf = tile_cache_get(tx, ty, &tileLen);
+    const uint8_t *tileBuf = src->fetch(src->ctx, tx, ty, &tileLen);
+    stats->tiles_scanned++;
     if (!tileBuf) {
+        stats->tiles_absent++;
         /* Expected at the edge of coverage: the 8 neighbors of a border tile
-         * simply do not exist. The cache remembers that, so this costs nothing
-         * after the first lookup. */
-        ESP_LOGD(TAG, "no tile %" PRId32 "_%" PRId32, filename_coord(tx), filename_coord(ty));
+         * simply do not exist. La fuente recuerda la ausencia, así que después de
+         * la primera consulta esto no cuesta nada. */
         return false;  // tile does not exist
     }
 
@@ -309,21 +305,61 @@ static bool scan_tile_for_match(int32_t tx, int32_t ty, float lat, float lon,
     return true;
 }
 
-bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
-                           int *outSpeed, char *outStreet, int maxStreetLen)
+void map_match_reset(map_match_state_t *st)
 {
-    static char locked_name[MAX_STREET_NAME];
-    static int  locked_speed = 0;
-    static bool have_lock = false;
-    /* Whether the limit currently on screen came from an unnamed way. */
-    static bool locked_anon = false;
+    if (st) {
+        memset(st, 0, sizeof(*st));
+    }
+}
+
+const char *map_limit_origin_name(map_limit_origin_t o)
+{
+    switch (o) {
+    case MAP_LIMIT_NAMED_WAY: return "via_con_nombre";
+    case MAP_LIMIT_ANON_WAY:  return "via_anonima";
+    case MAP_LIMIT_NONE:
+    default:                  return "ninguno";
+    }
+}
+
+bool map_match_query(map_match_state_t *st, const map_tile_source_t *src,
+                    const map_query_t *q, map_result_t *out)
+{
+    if (!st || !src || !src->fetch || !q || !out) {
+        if (out) {
+            memset(out, 0, sizeof(*out));
+        }
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->generation = src->generation;
+
+    /* Alias locales con los nombres de la versión anterior, para que el cuerpo del
+     * algoritmo quede idéntico y el diff sea revisable. El estado ya no es `static`
+     * de función: vive en `st` y se puede resetear. */
+    const float lat = q->lat;
+    const float lon = q->lon;
+    const float cog_deg = q->cog_deg;
+    const float speed_kmh = q->speed_kmh;
+    char *const locked_name = st->locked_name;
+    int  locked_speed = st->locked_speed;
+    bool have_lock = st->have_lock;
+    bool locked_anon = st->locked_anon;
+    int *const outSpeed = &out->speed_kmh;
+    char *const outStreet = out->street;
+    const int maxStreetLen = (int)sizeof(out->street);
 
     /* Reject bogus near-null-island fixes (lat/lon ~ 0) that some NMEA
      * statements emit between real fixes. The device is in Argentina (~-34,-58)
      * and is never legitimately near 0,0 — without this each junk fix triggers a
      * full 9-tile neighbor scan of failing fopens, which is a big part of the lag. */
-    if(fabsf(lat) < 1.0f && fabsf(lon) < 1.0f)
+    if(fabsf(lat) < 1.0f && fabsf(lon) < 1.0f) {
+        /* Fix cerca de null-island: se rechaza sin tocar la tarjeta ni el estado. */
+        out->matched = false;
+        out->limit_origin = MAP_LIMIT_NONE;
         return false;
+    }
 
     bool use_heading = (speed_kmh >= HEADING_MIN_SPEED_KMH) &&
                        isfinite(cog_deg) && cog_deg >= 0.0f;
@@ -362,7 +398,7 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
         float tileAnonDist = 1e12f;
         int   tileAnonSpeed = 0;
 
-        if (scan_tile_for_match(base_origin_lat, base_origin_lon, lat, lon,
+        if (scan_tile_for_match(src, out, base_origin_lat, base_origin_lon, lat, lon,
                                 cog_deg, use_heading, preferred, preferred_speed,
                                 &tileBestScore, &tileBestDist, &tileBestSpeed,
                                 tileBestName, sizeof(tileBestName),
@@ -426,7 +462,7 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
             float tileAnonDist = 1e12f;
             int   tileAnonSpeed = 0;
 
-            if (!scan_tile_for_match(ntx, nty, lat, lon,
+            if (!scan_tile_for_match(src, out, ntx, nty, lat, lon,
                                      cog_deg, use_heading, preferred, preferred_speed,
                                      &tileBestScore, &tileBestDist, &tileBestSpeed,
                                      tileBestName, sizeof(tileBestName),
@@ -462,10 +498,22 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
             locked_anon = true;
             strncpy(outStreet, locked_name, maxStreetLen);
             outStreet[maxStreetLen - 1] = 0;
+            st->locked_speed = locked_speed;
+            st->have_lock = have_lock;
+            st->locked_anon = locked_anon;
+            out->matched = true;
+            out->limit_origin = MAP_LIMIT_ANON_WAY;
+            out->anon_dist_m = globalAnonDist;
+            out->best_dist_m = globalBestDist;
             return true;
         }
         *outSpeed = 0;
         outStreet[0] = 0;
+        st->locked_speed = locked_speed;
+        st->have_lock = have_lock;
+        st->locked_anon = locked_anon;
+        out->matched = false;
+        out->limit_origin = MAP_LIMIT_NONE;
         return false;
     }
 
@@ -496,5 +544,13 @@ bool get_speed_and_name_at(float lat, float lon, float cog_deg, float speed_kmh,
     locked_anon = use_anon;
     strncpy(outStreet, globalBestName, maxStreetLen);
     outStreet[maxStreetLen - 1] = 0;
+
+    st->locked_speed = locked_speed;
+    st->have_lock = have_lock;
+    st->locked_anon = locked_anon;
+    out->matched = true;
+    out->limit_origin = use_anon ? MAP_LIMIT_ANON_WAY : MAP_LIMIT_NAMED_WAY;
+    out->best_dist_m = globalBestDist;
+    out->anon_dist_m = globalAnonDist;
     return true;
 }

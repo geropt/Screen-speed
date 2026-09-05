@@ -3,6 +3,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "sd_manager.h"
+
+/* Ruta de los tiles en la tarjeta. Vive acá, con el almacenamiento: el matcher ya
+ * no sabe de rutas ni de puntos de montaje (P04). */
+#define TILE_PATH   MOUNT_POINT "/tiles"
 
 #ifdef __cplusplus
 extern "C" {

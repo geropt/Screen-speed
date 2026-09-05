@@ -1,5 +1,6 @@
 #include "sd_manager.h"
-#include "tile_reader.h"
+#include "map_match.h"
+#include "map_store.h"
 #include "tile_cache.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -44,6 +45,8 @@ static QueueHandle_t s_signal_queue;
  * principal. Nadie más los toca. */
 static vehicle_state_t s_vehicle;
 static ui_model_state_t s_ui;
+/* Estado del matcher: explícito y reseteable desde P04. */
+static map_match_state_t s_match;
 
 /* Disponibilidad de la tarjeta. La escribe la tarea que vigila el montaje y la
  * lee la tarea principal para no intentar 9 aperturas de tile por fix cuando no
@@ -166,7 +169,11 @@ static void sd_watch_task(void *arg)
             if (err == ESP_OK) {
                 s_sd_mounted = true;
                 announced_missing = false;
-                ESP_LOGI(TAG, "tarjeta montada; mapas disponibles");
+                /* Generación nueva: el contenido puede ser de otra tarjeta, así
+                 * que todo resultado calculado antes queda marcado como viejo. */
+                map_store_set_available(true);
+                ESP_LOGI(TAG, "tarjeta montada; mapas disponibles, generacion %" PRIu64,
+                         map_store_generation());
             } else {
                 if (!announced_missing) {
                     ESP_LOGW(TAG, "sin tarjeta (%s): se sigue mostrando velocidad, "
@@ -231,6 +238,8 @@ void app_main(void)
     vehicle_state_init(&s_vehicle, &vs_cfg);
     ui_model_config_t ui_cfg = UI_MODEL_CONFIG_DEFAULT();
     ui_model_init(&s_ui, &ui_cfg);
+    map_store_init();
+    map_match_reset(&s_match);
 
     waveshare_led_init();
     // El splash (logo mykeego + anillo) ya quedo cargado dentro de waveshare_led_init().
@@ -310,6 +319,8 @@ void app_main(void)
         static uint64_t last_epoch;
         if (last_epoch != 0 && snap.tracker_epoch != last_epoch) {
             ui_model_invalidate(&s_ui);
+            /* El lock de calle del matcher es del vehículo anterior. */
+            map_match_reset(&s_match);
         }
         last_epoch = snap.tracker_epoch;
 
@@ -320,21 +331,36 @@ void app_main(void)
             ui_match_input_t match = {0};
             match.tracker_epoch = snap.tracker_epoch;
 
-            int speed_limit = 0;
-            char street[UI_STREET_MAX];
-            street[0] = '\0';
+            /* La fuente se toma justo antes de consultar: su generación viaja al
+             * resultado, así que un mapa que se reemplace mientras se leían tiles
+             * queda detectable. */
+            map_tile_source_t src = map_store_tile_source();
+            uint64_t gen_before = src.generation;
 
+            map_query_t query = { (float)snap.lat, (float)snap.lon,
+                                  snap.cog_deg, snap.speed_kmh };
+            map_result_t result;
             res_metrics_begin(RES_CH_MAP_MATCH);
-            match.matched = get_speed_and_name_at((float)snap.lat, (float)snap.lon,
-                                                 snap.cog_deg, snap.speed_kmh,
-                                                 &speed_limit, street, sizeof(street));
+            map_match_query(&s_match, &src, &query, &result);
             res_metrics_end(RES_CH_MAP_MATCH);
 
+            if (result.generation != map_store_generation() || gen_before == 0) {
+                /* El mapa cambió mientras se resolvía, o no había mapa: el
+                 * resultado pertenece a otra generación y se descarta. */
+                ESP_LOGW(TAG, "resultado de mapa descartado: generacion %" PRIu64
+                              " ya no es la actual %" PRIu64,
+                         result.generation, map_store_generation());
+                map_match_reset(&s_match);
+                result.matched = false;
+            }
+
+            match.matched = result.matched;
             if (match.matched) {
-                match.limit_kmh = speed_limit;
-                match.has_limit = (speed_limit > 0);
-                match.anonymous = (street[0] == '\0');
-                strncpy(match.street, street, UI_STREET_MAX - 1);
+                match.limit_kmh = result.speed_kmh;
+                match.has_limit = (result.speed_kmh > 0);
+                match.anonymous = (result.limit_origin == MAP_LIMIT_ANON_WAY &&
+                                   result.street[0] == '\0');
+                strncpy(match.street, result.street, UI_STREET_MAX - 1);
                 /* La época actual se vuelve a leer: si cambió mientras se leían
                  * tiles, ui_model_on_match descarta el resultado en lugar de
                  * mostrar el límite de la calle del vehículo anterior. */
