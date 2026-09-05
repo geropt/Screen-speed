@@ -2239,6 +2239,26 @@ CONFIG_WIFI_PROV_STA_ALL_CHANNEL_SCAN=y
 # end of Wi-Fi Provisioning Manager
 
 #
+# Placa Waveshare 1.75
+#
+CONFIG_BOARD_LVGL_BUF_ROWS_116=y
+# CONFIG_BOARD_LVGL_BUF_ROWS_64 is not set
+# CONFIG_BOARD_LVGL_BUF_ROWS_48 is not set
+# CONFIG_BOARD_LVGL_BUF_ROWS_32 is not set
+CONFIG_BOARD_LVGL_BUF_ROWS=116
+# CONFIG_BOARD_ENABLE_TOUCH is not set
+# CONFIG_BOARD_ENABLE_IMU is not set
+# CONFIG_BOARD_ENABLE_AUDIO is not set
+# end of Placa Waveshare 1.75
+
+#
+# Instrumentación de recursos
+#
+CONFIG_RES_METRICS_ENABLE=y
+CONFIG_RES_METRICS_LOG_PERIOD_MS=30000
+# end of Instrumentación de recursos
+
+#
 # CMake Utilities
 #
 # CONFIG_CU_RELINKER_ENABLE is not set
