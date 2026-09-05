@@ -38,7 +38,7 @@ DEFINES  := -DDATASET_DIR='"$(DATASET_ROOT)"' \
 TESTS := test_map_match_equivalence test_map_match_robustness \
          test_res_stats test_ruptela_framing test_outbox \
          test_backup_policy test_ruptela_vectors test_capsule_equivalence \
-         test_vehicle_state test_ui_model
+         test_map_installer test_vehicle_state test_ui_model
 
 .PHONY: test all clean check-dataset
 
@@ -53,6 +53,7 @@ test: check-dataset $(TESTS)
 	./test_backup_policy
 	./test_ruptela_vectors
 	./test_capsule_equivalence
+	./test_map_installer
 	./test_vehicle_state
 	./test_ui_model
 
@@ -97,6 +98,11 @@ test_capsule_equivalence: test_capsule_equivalence.c $(MATCH_SRC)/map_match.c \
                           $(CAPSULE_SRC)/map_capsule.c | $(CAPSULE_FILE)
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) $(DEFINES) \
 	    -DCAPSULE_PATH='"$(CAPSULE_FILE)"' -o $@ $^ -lm
+
+# Instalador: inyección de fallas en cada transición persistente.
+test_map_installer: test_map_installer.c $(CAPSULE_SRC)/map_installer.c \
+                   $(CAPSULE_SRC)/map_capsule.c
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
 
 # Outbox de telemetría: pendiente / en vuelo / confirmado.
 test_outbox: test_outbox.c $(OUTBOX_SRC)/outbox.c
