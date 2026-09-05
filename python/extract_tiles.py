@@ -8,7 +8,9 @@ from math import floor
 # -----------------------------
 TILE_SIZE = 0.003      # degrees (330 * 270 m approx)
 OUT_DIR = "tiles/"
-CONFIG_FILE_PATH = "../esp/Firmware/components/tile_reader/tile_config.h"
+# P04: tile_reader se dividió en map_match (geometría) y map_store
+# (almacenamiento). Las constantes del formato viven con la geometría.
+CONFIG_FILE_PATH = "../esp/Firmware/components/map_match/include/tile_config.h"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
