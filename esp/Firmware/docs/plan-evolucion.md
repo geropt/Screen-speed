@@ -351,10 +351,17 @@ del HUD; la [CI](../../../.github/workflows/trazabilidad.yml) construye firmware
 Ampliar explícitamente con componentes compartidos, matcher, políticas e instalador.
 No presentar los 205 tests Python reportados como cobertura del matcher C actual.
 
-Corrección registrada en P00: **ni `tools/run_tests.sh` ni
-`.github/workflows/trazabilidad.yml` existen en este repositorio**. Los dos enlaces
-anteriores describen lo que hay que construir, no evidencia disponible; se crean en
-la etapa de calificación integrada.
+Corrección registrada en P00: ni `tools/run_tests.sh` ni
+`.github/workflows/trazabilidad.yml` existían cuando se escribió esto. Ya se crearon
+en la calificación integrada, con otro nombre para el workflow:
+
+```sh
+./tools/run_tests.sh              # todo lo verificable sin hardware
+./tools/run_tests.sh --with-build # además compila el firmware
+```
+
+El workflow es [`.github/workflows/verificacion.yml`](../../../.github/workflows/verificacion.yml).
+Cobertura real contra la matriz de fallas y límites en [P11](p11-calificacion.md).
 
 Build HUD: entorno ESP-IDF 5.4.4 fijado y `idf.py build`. Análisis de tamaño:
 `idf.py size` y `idf.py size-components` en ese entorno. Registrar binario final,
