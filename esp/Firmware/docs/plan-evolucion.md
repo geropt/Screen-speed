@@ -335,6 +335,11 @@ Tests actuales del HUD, desde `esp/Firmware`:
 make -C host_tests test
 ```
 
+Ese arnés se creó en P00 (antes no existía, pese a estar citado aquí) y hoy
+contiene la caracterización del lector/matcher previo a P04. Alcance y límites en
+[host_tests/README.md](../host_tests/README.md); línea base en
+[P00](baseline-P00.md).
+
 Tests del piloto, desde raíz del repositorio:
 
 ```sh
@@ -345,6 +350,11 @@ El [runner](../../../tools/run_tests.sh) ejecuta Python, herramientas y tests IO
 del HUD; la [CI](../../../.github/workflows/trazabilidad.yml) construye firmware.
 Ampliar explícitamente con componentes compartidos, matcher, políticas e instalador.
 No presentar los 205 tests Python reportados como cobertura del matcher C actual.
+
+Corrección registrada en P00: **ni `tools/run_tests.sh` ni
+`.github/workflows/trazabilidad.yml` existen en este repositorio**. Los dos enlaces
+anteriores describen lo que hay que construir, no evidencia disponible; se crean en
+la etapa de calificación integrada.
 
 Build HUD: entorno ESP-IDF 5.4.4 fijado y `idf.py build`. Análisis de tamaño:
 `idf.py size` y `idf.py size-components` en ese entorno. Registrar binario final,

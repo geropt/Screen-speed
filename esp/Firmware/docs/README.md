@@ -19,6 +19,7 @@ necesariamente la versión instalada en cada unidad.
 | [Blueprint del firmware definitivo](blueprint-firmware.md) | Documento principal: decisiones, módulos, UI, Ruptela, mapas, teléfono, OTA y recuperación |
 | [Hardware, RAM y pantalla](hardware-y-memoria.md) | Placa 1.75, SRAM/PSRAM/GRAM, cálculos de buffers, presupuesto y experimentos de rendimiento |
 | [Plan de implementación](plan-evolucion.md) | P00–P11 con dependencias, tareas concretas, metas y pruebas de aceptación |
+| [Línea base P00](baseline-P00.md) | Dossier ejecutado: commit, toolchain, build limpio con hashes, dataset, defaults corregidos y pendientes de hardware |
 | [Estado actual](estado-actual.md) | Hardware configurado, módulos existentes, problemas y evidencia de pruebas |
 | [Arquitectura resumida](arquitectura.md) | Vista breve de responsabilidades, tareas, contratos y reglas para agregar funciones |
 | [Wi-Fi y Starlink](starlink-backup.md) | Reutilización del piloto, IO 418, entrega de paquetes y convivencia con la app |
