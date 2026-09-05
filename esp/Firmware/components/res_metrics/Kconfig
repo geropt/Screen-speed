@@ -1,0 +1,25 @@
+menu "Instrumentación de recursos"
+
+    config RES_METRICS_ENABLE
+        bool "Habilitar log periódico de recursos"
+        default y
+        help
+            Los contadores y las latencias se acumulan siempre (cuesta unas pocas
+            operaciones enteras por muestra); esta opción controla únicamente si
+            se imprime el resumen periódico.
+
+            Se deja en `y` durante P01 porque el objetivo de la etapa es saber
+            cuánto margen hay antes de integrar red, mapas y app. Apagarlo no
+            cambia el comportamiento medido, sólo silencia el log.
+
+    config RES_METRICS_LOG_PERIOD_MS
+        int "Período del resumen (ms)"
+        default 30000
+        range 1000 600000
+        depends on RES_METRICS_ENABLE
+        help
+            Un resumen cada 30 s alcanza para ver tendencias sin ensuciar la
+            consola. El plan pide logs acotados y prohíbe tráfico por píxel o por
+            muestra.
+
+endmenu

@@ -19,13 +19,14 @@ REPO_ROOT   := $(abspath $(FW_ROOT)/../..)
 DATASET_ROOT ?= $(REPO_ROOT)/python
 
 TILE_SRC := $(FW_ROOT)/components/tile_reader
+RES_SRC  := $(FW_ROOT)/components/res_metrics
 SHIM_SRC := $(CURDIR)/host_shim
 
-INCLUDES := -I$(SHIM_SRC) -I$(TILE_SRC) -I$(CURDIR)
+INCLUDES := -I$(SHIM_SRC) -I$(TILE_SRC) -I$(RES_SRC)/include -I$(CURDIR)
 DEFINES  := -DHOST_MOUNT_POINT='"$(DATASET_ROOT)"' \
             -DGOLDEN_PATH='"fixtures/tile_reader_baseline.golden"'
 
-TESTS := test_tile_reader_baseline
+TESTS := test_tile_reader_baseline test_res_stats
 
 .PHONY: test all update-golden clean check-dataset
 
@@ -33,6 +34,7 @@ all: $(TESTS)
 
 test: check-dataset $(TESTS)
 	./test_tile_reader_baseline
+	./test_res_stats
 
 check-dataset:
 	@test -d "$(DATASET_ROOT)/tiles" || { \
@@ -48,6 +50,10 @@ test_tile_reader_baseline: test_tile_reader_baseline.c \
                            $(TILE_SRC)/tile_cache.c \
                            $(SHIM_SRC)/host_shim.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) $(DEFINES) -o $@ $^ -lm
+
+# res_stats es C puro sin dependencias de ESP-IDF: no necesita shims.
+test_res_stats: test_res_stats.c $(RES_SRC)/res_stats.c
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
 
 clean:
 	rm -f $(TESTS)
