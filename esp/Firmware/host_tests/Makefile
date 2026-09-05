@@ -24,15 +24,16 @@ VS_SRC   := $(FW_ROOT)/components/vehicle_state
 UI_SRC   := $(FW_ROOT)/components/ui_model
 # Componente compartido con el piloto (esp/components).
 SHARED_SRC := $(abspath $(FW_ROOT)/../components/ruptela_framing)
+OUTBOX_SRC := $(abspath $(FW_ROOT)/../components/outbox)
 SHIM_SRC := $(CURDIR)/host_shim
 
 INCLUDES := -I$(SHIM_SRC) -I$(MATCH_SRC)/include -I$(RES_SRC)/include -I$(VS_SRC)/include -I$(UI_SRC)/include \
-            -I$(SHARED_SRC)/include -I$(CURDIR)
+            -I$(SHARED_SRC)/include -I$(OUTBOX_SRC)/include -I$(CURDIR)
 DEFINES  := -DDATASET_DIR='"$(DATASET_ROOT)"' \
             -DGOLDEN_PATH='"fixtures/tile_reader_baseline.golden"'
 
 TESTS := test_map_match_equivalence test_map_match_robustness \
-         test_res_stats test_ruptela_framing \
+         test_res_stats test_ruptela_framing test_outbox \
          test_vehicle_state test_ui_model
 
 .PHONY: test all clean check-dataset
@@ -44,6 +45,7 @@ test: check-dataset $(TESTS)
 	./test_map_match_robustness
 	./test_res_stats
 	./test_ruptela_framing
+	./test_outbox
 	./test_vehicle_state
 	./test_ui_model
 
@@ -76,6 +78,10 @@ test_vehicle_state: test_vehicle_state.c $(VS_SRC)/vehicle_state.c
 
 # ui_model: presentación pura, depende de vehicle_state sólo por el snapshot.
 test_ui_model: test_ui_model.c $(UI_SRC)/ui_model.c $(VS_SRC)/vehicle_state.c
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
+
+# Outbox de telemetría: pendiente / en vuelo / confirmado.
+test_outbox: test_outbox.c $(OUTBOX_SRC)/outbox.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
 
 # Framing compartido con el piloto, también C puro.
