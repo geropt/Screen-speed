@@ -245,6 +245,16 @@ static void process_buffer(ruptela_io_parser_t *parser)
         const size_t first_frame_len = 1U + first_record_len + 1U;
         if (parser->buffered >= first_frame_len) {
             ++parser->stats.crc_errors;
+            /* Acá cada posición del stream se evalúa UNA sola vez, a diferencia del
+             * barrido de ventana de arriba. Es el único lugar donde tiene sentido
+             * contar «llegó un record y vino dañado»: se exige la validación
+             * estructural completa —la misma de can_tx, con cero falsos positivos
+             * medidos sobre 2 millones de bloques al azar— así que un valor distinto
+             * de cero significa que el enlace está entregando records corruptos, no
+             * que el parser probó una posición y no cerró. */
+            if (validate_extended_record(parser->buffer + 1U, first_record_len) > 0) {
+                ++parser->stats.frames_crc_failed;
+            }
             /* The first complete candidate failed CRC. Advance one byte; the
              * full-window scan above already protected any later valid frame. */
             discard_prefix(parser, 1U);

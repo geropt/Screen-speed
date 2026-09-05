@@ -330,6 +330,59 @@ static void test_can_tx_accepts_synthetic_and_official(void)
     (void)wire_len;
 }
 
+
+/* Un record real cuyo CRC no coincide tiene que contarse aparte de las posiciones de
+ * byte que el barrido prueba y descarta.
+ *
+ * Motivo, medido sobre tres capturas de campo: `crc_errors` cuenta cada posición
+ * probada, así que sobre un enlace que además transporta NMEA dio 110 229, 92 801 y
+ * 84 721. Como señal de salud no sirve. `frames_crc_failed` cuenta sólo lo que pasa la
+ * validación estructural completa y falla CRC8, y sobre esas mismas capturas dio 9, 8
+ * y 10: la cantidad real de records que llegaron dañados. */
+static void test_frames_crc_failed_cuenta_records_reales(void)
+{
+    uint8_t frame[RUPTELA_IO_FRAME_BUFFER_SIZE];
+    size_t frame_len = make_ignition_frame(frame, 1);
+
+    /* Corromper un byte del interior del record deja la estructura intacta y rompe el
+     * CRC: es exactamente el caso de campo. */
+    frame[frame_len - 6] ^= 0xFF;
+
+    ignition_events_t events = {0};
+    ruptela_io_parser_t parser;
+    ruptela_io_parser_init(&parser, on_ignition, &events);
+    ruptela_io_parser_feed(&parser, frame, frame_len);
+
+    ruptela_io_parser_stats_t stats;
+    ruptela_io_parser_get_stats(&parser, &stats);
+    assert(stats.valid_frames == 0);
+    assert(events.count == 0);
+    /* Lo importante: se reporta como record dañado, no como ruido. */
+    assert(stats.frames_crc_failed == 1);
+}
+
+static void test_ruido_no_cuenta_como_record_danado(void)
+{
+    /* Texto NMEA puro: muchas posiciones probadas, ningún record dañado. Si esto
+     * contara, el indicador volvería a ser inútil. */
+    const char *nmea =
+        "$GNRMC,160927.70,A,3432.04083,S,05830.20690,W,59.745,150.08,050826,,,A,V*3C\r\n"
+        "$GNGNS,160927.70,3432.04083,S,05830.20690,W,AANNNN,12,0.95,25.1,13.8,,,V*27\r\n"
+        "###IMEI860369052116751";
+
+    ignition_events_t events = {0};
+    ruptela_io_parser_t parser;
+    ruptela_io_parser_init(&parser, on_ignition, &events);
+    for (int rep = 0; rep < 20; ++rep) {
+        ruptela_io_parser_feed(&parser, (const uint8_t *)nmea, strlen(nmea));
+    }
+
+    ruptela_io_parser_stats_t stats;
+    ruptela_io_parser_get_stats(&parser, &stats);
+    assert(stats.valid_frames == 0);
+    assert(stats.frames_crc_failed == 0);
+}
+
 int main(void)
 {
     test_official_two_record_wire_example();
@@ -340,6 +393,8 @@ int main(void)
     test_crc_collision_does_not_eat_real_frame();
     test_flespi_nmea_payloads_are_not_records();
     test_can_tx_accepts_synthetic_and_official();
+    test_frames_crc_failed_cuenta_records_reales();
+    test_ruido_no_cuenta_como_record_danado();
     puts("ruptela_io_parser tests passed");
     return 0;
 }

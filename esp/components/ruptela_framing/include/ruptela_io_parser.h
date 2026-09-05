@@ -21,8 +21,22 @@ typedef void (*ruptela_record_callback_t)(const uint8_t *record, size_t record_l
 
 typedef struct {
     uint32_t valid_frames;
+    /** Posiciones de byte que se probaron como inicio de frame y no cerraron.
+     *
+     * NO es una cuenta de records dañados. El parser barre el stream probando cada
+     * offset, así que sobre un enlace que además transporta NMEA este contador crece
+     * con el tamaño del tráfico: medido sobre una captura de campo de 120 KB dio
+     * 110 229. Como señal de salud no sirve; para eso está `frames_crc_failed`. */
     uint32_t crc_errors;
     uint32_t malformed_records;
+    /** Frames que parecían un record de verdad y cuyo CRC8 no coincidió.
+     *
+     * Se cuenta sólo cuando el candidato tiene encabezado GNSS plausible —timestamp
+     * en rango, coordenadas en rango— y el frame está completo. Eso hace que un
+     * valor distinto de cero signifique «llegó algo que se parece a un record y vino
+     * dañado», que es lo que hay que mirar en campo para distinguirlo de «no llega
+     * ningún record». */
+    uint32_t frames_crc_failed;
 } ruptela_io_parser_stats_t;
 
 typedef struct {

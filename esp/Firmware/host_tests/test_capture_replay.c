@@ -189,9 +189,14 @@ int main(int argc, char **argv)
     printf("  IMEI      marcadores=%u ultimo=%s cambios=%u\n",
            base.imeis, base.last_imei[0] ? base.last_imei : "(ninguno)",
            base.imei_changes);
-    printf("  IO        records=%u (%zu bytes) validos=%u crc_malo=%u malformados=%u\n",
+    printf("  IO        records=%u (%zu bytes) validos=%u malformados=%u\n",
            base.records, base.record_bytes, base_io.valid_frames,
-           base_io.crc_errors, base_io.malformed_records);
+           base_io.malformed_records);
+    /* El contador que importa: frames que parecían un record y vinieron dañados.
+     * `crc_errors` cuenta posiciones de byte probadas y crece con el tráfico, así
+     * que se muestra aparte para que nadie lo lea como salud del enlace. */
+    printf("            frames_danados=%u  (posiciones probadas=%u)\n",
+           base_io.frames_crc_failed, base_io.crc_errors);
     printf("            ignicion=%u (ultima=%d) gprs=%u (ultimo=%d)\n",
            base.ignition_events, (int)base.last_ignition,
            base.gprs_events, (int)base.last_gprs);
