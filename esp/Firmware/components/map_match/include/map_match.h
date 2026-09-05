@@ -139,6 +139,14 @@ typedef struct {
     /** Tiles consultados y ausentes en esta consulta, para diagnóstico. */
     uint32_t           tiles_scanned;
     uint32_t           tiles_absent;
+    /** Tiles que se cortaron a mitad de un registro.
+     *
+     * El matcher siempre toleró el truncamiento: deja de leer y conserva lo que ya
+     * puntuó, que es lo correcto para no perder un tramo válido por un archivo
+     * dañado al final. Lo que faltaba era **decirlo**. Un tile truncado significa
+     * escritura interrumpida o tarjeta dañada, y un resultado calculado sobre datos
+     * parciales no debería parecer completo. */
+    uint32_t           tiles_truncated;
 } map_result_t;
 
 /**

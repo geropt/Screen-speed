@@ -185,6 +185,13 @@ static bool scan_tile_for_match(const map_tile_source_t *src, map_result_t *stat
 
     tile_rd_t rd = { tileBuf, tileBuf + tileLen, true };
     uint32_t segCount = rd_u32(&rd);
+    if (!rd.ok) {
+        /* El archivo no alcanza ni para el contador de segmentos. Antes esto se
+         * confundía con un tile vacío: segCount quedaba en 0, el bucle no corría y
+         * el resultado parecía «acá no hay calles» en lugar de «este archivo está
+         * dañado». Son cosas distintas y ahora se distinguen. */
+        stats->tiles_truncated++;
+    }
     float localBestScore = 1e12f;
     float localBestDist = 1e12f;
     int   localBestSpeed = 0;
@@ -212,8 +219,13 @@ static bool scan_tile_for_match(const map_tile_source_t *src, map_result_t *stat
         uint16_t speed = rd_u16(&rd);
         uint16_t nameLen = rd_u16(&rd);
         const uint8_t *name = rd_block(&rd, nameLen);
-        if (!rd.ok)
-            break;   /* truncated tile: stop, whatever we already scored stands */
+        if (!rd.ok) {
+            /* Tile truncado: se deja de leer y vale lo ya puntuado —perder un tramo
+             * bueno por un archivo dañado al final sería peor—, pero ahora queda
+             * contado en lugar de pasar inadvertido. */
+            stats->tiles_truncated++;
+            break;
+        }
 
         for (uint16_t p = 0; p + 1 < numPoints; p++) {
             float d = distance_point_to_segment_haversine(
