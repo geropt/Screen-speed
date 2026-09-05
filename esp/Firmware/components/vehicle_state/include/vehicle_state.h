@@ -41,6 +41,15 @@ extern "C" {
 
 #define VEHICLE_IMEI_MAX_LEN 16
 
+/* Lecturas consecutivas coincidentes que hacen falta para aceptar un cambio de IMEI.
+ *
+ * El marcador `###IMEI` viaja sin checksum. Medido sobre una captura de campo: en
+ * 1 809 lecturas apareció una corrupta, con un dígito de más. Aceptar una sola lectura
+ * discrepante habría subido `tracker_epoch` y descartado posición, ignición y GPRS por
+ * un byte perdido en la serie. El marcador se repite varias veces por segundo, así que
+ * exigir dos coincidencias no retrasa un cambio real y descarta el ruido. */
+#define VEHICLE_IMEI_CONFIRMATIONS 2
+
 /** Estado de frescura de una señal. */
 typedef enum {
     VS_UNKNOWN = 0,  /**< nunca se recibió                    */
@@ -116,12 +125,17 @@ typedef struct {
 
     bool     imei_known;
     char     imei[VEHICLE_IMEI_MAX_LEN + 1];
+    /* IMEI discrepante a la espera de confirmación. */
+    char     imei_pending[VEHICLE_IMEI_MAX_LEN + 1];
+    uint8_t  imei_pending_count;
 
     /* Contadores para diagnóstico. */
     uint32_t fixes;
     uint32_t ignition_updates;
     uint32_t gprs_updates;
     uint32_t imei_changes;
+    /** Lecturas de IMEI discrepantes descartadas por falta de confirmación. */
+    uint32_t imei_rejected_single;
     uint32_t rejected_stale_clock;
 } vehicle_state_t;
 

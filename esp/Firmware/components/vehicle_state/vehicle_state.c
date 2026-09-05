@@ -121,18 +121,53 @@ bool vehicle_state_apply(vehicle_state_t *vs, const vehicle_msg_t *msg)
         }
         if (vs->imei_known && strncmp(vs->imei, incoming, VEHICLE_IMEI_MAX_LEN) == 0) {
             /* Mismo tracker: repetir el marcador no cambia nada y sobre todo NO
-             * rejuvenece ninguna otra señal. */
+             * rejuvenece ninguna otra señal. Se reinicia el conteo de lecturas
+             * discrepantes, porque la corrida de discrepancias se cortó. */
+            vs->imei_pending_count = 0;
+            vs->imei_pending[0] = '\0';
             return false;
         }
-        bool was_known = vs->imei_known;
+
+        if (!vs->imei_known) {
+            /* Primera vez que se conoce el IMEI: no es un cambio de tracker, así que
+             * no se tira el fix que ya se tenía. Se acepta de una. */
+            strncpy(vs->imei, incoming, VEHICLE_IMEI_MAX_LEN);
+            vs->imei[VEHICLE_IMEI_MAX_LEN] = '\0';
+            vs->imei_known = true;
+            vs->imei_pending_count = 0;
+            vs->imei_pending[0] = '\0';
+            return true;
+        }
+
+        /* Discrepa del IMEI conocido. NO se declara cambio de tracker con una sola
+         * lectura.
+         *
+         * Motivo, medido sobre una captura de campo: el marcador `###IMEI` viaja sin
+         * checksum, y en 1 809 lecturas apareció una corrupta —un dígito de más—.
+         * Aceptarla habría subido `tracker_epoch` y descartado posición, ignición y
+         * GPRS por un byte perdido en la serie. Como el marcador se repite varias
+         * veces por segundo, exigir lecturas consecutivas coincidentes no retrasa un
+         * cambio real y descarta el ruido. */
+        if (strncmp(vs->imei_pending, incoming, VEHICLE_IMEI_MAX_LEN) == 0) {
+            vs->imei_pending_count++;
+        } else {
+            strncpy(vs->imei_pending, incoming, VEHICLE_IMEI_MAX_LEN);
+            vs->imei_pending[VEHICLE_IMEI_MAX_LEN] = '\0';
+            vs->imei_pending_count = 1;
+        }
+
+        if (vs->imei_pending_count < VEHICLE_IMEI_CONFIRMATIONS) {
+            vs->imei_rejected_single++;
+            return false;
+        }
+
+        /* Confirmado: cambió de tracker. Época nueva y estado invalidado. */
         strncpy(vs->imei, incoming, VEHICLE_IMEI_MAX_LEN);
         vs->imei[VEHICLE_IMEI_MAX_LEN] = '\0';
-        vs->imei_known = true;
-        if (was_known) {
-            /* Cambió de tracker: época nueva y estado invalidado. */
-            vs->imei_changes++;
-            vehicle_state_new_epoch(vs);
-        }
+        vs->imei_pending_count = 0;
+        vs->imei_pending[0] = '\0';
+        vs->imei_changes++;
+        vehicle_state_new_epoch(vs);
         return true;
     }
 

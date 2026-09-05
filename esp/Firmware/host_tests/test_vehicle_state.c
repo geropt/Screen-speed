@@ -237,10 +237,17 @@ static void test_imei_cambia_invalida_estado(void)
     assert(s.tracker_epoch == 1);
     assert(s.fix_epoch_current == true);
 
-    /* Otro tracker en el mismo cable. */
-    assert(apply_imei(&vs, 2000, "356938035643801") == true);
-
+    /* Otro tracker en el mismo cable. La primera lectura discrepante NO alcanza:
+     * podría ser un marcador corrupto. */
+    assert(apply_imei(&vs, 2000, "356938035643801") == false);
+    assert(vs.imei_rejected_single == 1);
     vehicle_state_snapshot(&vs, 2000, &s);
+    assert(s.tracker_epoch == 1);
+    assert(s.fix_state == VS_FRESH);
+    /* La segunda coincidente sí. */
+    assert(apply_imei(&vs, 2100, "356938035643801") == true);
+
+    vehicle_state_snapshot(&vs, 2100, &s);
     /* Época nueva y todo lo anterior invalidado: la posición del vehículo
      * anterior es peor que no tener posición. */
     assert(s.tracker_epoch == 2);
@@ -281,13 +288,76 @@ static void test_epoca_marca_resultados_viejos(void)
     vehicle_state_snapshot(&vs, 1000, &antes);
 
     apply_imei(&vs, 2000, "999999999999999");
+    apply_imei(&vs, 2100, "999999999999999");
 
     vehicle_snapshot_t despues;
-    vehicle_state_snapshot(&vs, 2000, &despues);
+    vehicle_state_snapshot(&vs, 2100, &despues);
 
     /* Un resultado calculado con el snapshot viejo se puede rechazar comparando
      * la época, sin depender de tiempos. */
     assert(antes.tracker_epoch != despues.tracker_epoch);
+}
+
+
+static void test_imei_corrupto_aislado_no_cambia_epoca(void)
+{
+    /* El caso medido en campo: entre 1 809 lecturas correctas aparece una con un
+     * dígito de más. Un byte perdido en la serie no puede descartar el estado. */
+    vehicle_state_t vs;
+    vehicle_state_init(&vs, NULL);
+    apply_imei(&vs, 1000, "860369052116751");
+    apply_fix(&vs, 1000, -34.6, -58.4, 60.0f);
+    apply_ign(&vs, 1000, true);
+
+    /* Lectura corrupta, y después vuelve la buena. */
+    assert(apply_imei(&vs, 1100, "8600369052116751") == false);
+    assert(apply_imei(&vs, 1200, "860369052116751") == false);
+
+    vehicle_snapshot_t s;
+    vehicle_state_snapshot(&vs, 1200, &s);
+    assert(s.tracker_epoch == 1);
+    assert(s.fix_state == VS_FRESH);
+    assert(s.ignition_state == VS_FRESH);
+    assert(strcmp(s.imei, "860369052116751") == 0);
+    assert(vs.imei_changes == 0);
+    assert(vs.imei_rejected_single == 1);
+}
+
+static void test_dos_corrupciones_distintas_no_confirman(void)
+{
+    /* Dos lecturas corruptas seguidas pero DISTINTAS entre sí tampoco confirman: la
+     * confirmación exige que coincidan, no sólo que discrepen de la conocida. */
+    vehicle_state_t vs;
+    vehicle_state_init(&vs, NULL);
+    apply_imei(&vs, 1000, "860369052116751");
+    apply_fix(&vs, 1000, -34.6, -58.4, 60.0f);
+
+    assert(apply_imei(&vs, 1100, "8600369052116751") == false);
+    assert(apply_imei(&vs, 1200, "860369052116750") == false);
+
+    vehicle_snapshot_t s;
+    vehicle_state_snapshot(&vs, 1200, &s);
+    assert(s.tracker_epoch == 1);
+    assert(s.fix_state == VS_FRESH);
+    assert(vs.imei_rejected_single == 2);
+}
+
+static void test_la_buena_intercalada_corta_la_corrida(void)
+{
+    /* Corrupta, buena, corrupta: la lectura correcta en el medio reinicia el conteo,
+     * así que dos corruptas no consecutivas no llegan a confirmar. */
+    vehicle_state_t vs;
+    vehicle_state_init(&vs, NULL);
+    apply_imei(&vs, 1000, "860369052116751");
+
+    assert(apply_imei(&vs, 1100, "8600369052116751") == false);
+    assert(apply_imei(&vs, 1200, "860369052116751") == false);
+    assert(apply_imei(&vs, 1300, "8600369052116751") == false);
+
+    vehicle_snapshot_t s;
+    vehicle_state_snapshot(&vs, 1300, &s);
+    assert(s.tracker_epoch == 1);
+    assert(strcmp(s.imei, "860369052116751") == 0);
 }
 
 /* ---------- reloj ---------- */
@@ -389,6 +459,9 @@ int main(void)
     test_imei_cambia_invalida_estado();
     test_primer_imei_no_incrementa_epoca();
     test_epoca_marca_resultados_viejos();
+    test_imei_corrupto_aislado_no_cambia_epoca();
+    test_dos_corrupciones_distintas_no_confirman();
+    test_la_buena_intercalada_corta_la_corrida();
     test_mensaje_reordenado_se_descarta();
     test_snapshot_con_reloj_atrasado_no_da_edad_negativa();
     test_snapshot_es_coherente();
