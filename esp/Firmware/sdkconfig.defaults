@@ -1,21 +1,38 @@
-CONFIG_FATFS_VFS_FSTAT_BLKSIZE=4096
+# Configuración mínima para reproducir la línea base P00 desde un clon limpio.
+#
+# Antes de P00 este archivo divergía de la configuración realmente en uso en 25
+# claves, varias de ellas críticas: un clon sin `sdkconfig` generaba un firmware
+# con tabla de particiones de app única (sin OTA), UART del Ruptela en GPIO5,
+# `-Og`, stack de main de 3584 B, nombres largos de FAT desactivados y colores sin
+# swap. Cada bloque de abajo indica qué reproduce.
+#
+# Verificado con:
+#   python $IDF_PATH/tools/idf.py -B build_defaults_check \
+#          -D SDKCONFIG=/tmp/sdkconfig_p00_defaults build
+# comparando el resultado contra el `sdkconfig` de referencia.
+# Detalle en docs/baseline-P00.md.
+
 CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
-# 16 MiB: la tabla de particiones (partitions.csv) suma exactamente 0x1000000 con
-# dos slots de app de 3 MiB. Un default de 8 MiB hacía que un clon nuevo, sin
-# `sdkconfig`, generara una configuración incompatible con esa tabla. El sdkconfig
-# en uso ya declaraba 16 MiB; esto sólo unifica el default. Pendiente de P01:
-# confirmar el chip real con `esptool flash_id` en la unidad.
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_RODATA=y
-CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
+# --- Flash y particiones ---
+# 16 MiB: partitions.csv suma exactamente 0x1000000 con dos slots de app de 3 MiB.
+# El default anterior de 8 MiB era incompatible con esa tabla; peor, el default de
+# tabla era `partitions_singleapp.csv`, que elimina la posibilidad de OTA que P09
+# necesita. Pendiente de P01: confirmar el chip real con `esptool flash_id`.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- PSRAM ---
 CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_RODATA=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_SPIRAM_USE_MALLOC=y
@@ -23,25 +40,63 @@ CONFIG_ESP32S3_SPIRAM_SUPPORT=y
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 
+# --- Compilador y arranque ---
+# La referencia compila con -O2 (PERF) y coloca secciones huérfanas en lugar de
+# sólo advertir. El stack de main de 10240 B es el que usa el firmware actual;
+# reducirlo a 3584 B (el default de IDF) no está ensayado.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_ORPHAN_SECTIONS_PLACE=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
+CONFIG_PERIPH_CTRL_FUNC_IN_IRAM=y
+CONFIG_LOG_COLORS=y
 
-CONFIG_EXAMPLE_LVGL_PORT_TASK_CORE=1
-CONFIG_EXAMPLE_LVGL_PORT_AVOID_TEAR_ENABLE=y
+# --- Tarjeta SD / FATFS ---
+# Nombres largos en heap y 255 caracteres: la referencia los usa para las rutas
+# de tiles y para lo que se guarde en la tarjeta. El default de IDF
+# (FATFS_LFN_NONE) trunca a 8.3.
+CONFIG_FATFS_VFS_FSTAT_BLKSIZE=4096
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+CONFIG_FATFS_API_ENCODING_ANSI_OEM=y
 
+# --- Ruptela / NMEA ---
+# UART1 RX en GPIO18, como la unidad cableada hoy. El default del Kconfig del
+# proyecto es 5, que no corresponde a ninguna conexión real.
+# Pendiente de P01: confirmar la variante -G antes de dar GPIO18 por libre.
+CONFIG_NMEA_PARSER_UART_RXD=18
+
+# --- LVGL ---
+# LV_COLOR_16_SWAP es obligatorio para este panel QSPI: sin él los colores salen
+# invertidos. Las fuentes 12 y 16 están en la referencia; además su ausencia hacía
+# fallar la compilación de las demos de LVGL en un clon limpio.
+CONFIG_LV_COLOR_16_SWAP=y
 CONFIG_LV_COLOR_SCREEN_TRANSP=y
 CONFIG_LV_MEM_CUSTOM=y
 CONFIG_LV_MEMCPY_MEMSET_STD=y
-CONFIG_LV_USE_LOG=y
-CONFIG_LV_LOG_PRINTF=y
 CONFIG_LV_USE_PERF_MONITOR=y
 CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
 CONFIG_LV_FONT_MONTSERRAT_30=y
 CONFIG_LV_FONT_MONTSERRAT_34=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
-CONFIG_LV_USE_FONT_COMPRESSED=y
-CONFIG_LV_USE_IMGFONT=y
+# Logging de LVGL apagado, igual que la referencia. Con LV_USE_LOG=y (como estaba
+# sólo en los defaults) lv_demo_stress.c de LVGL 8.4.0 rompe con -Werror=format.
+# CONFIG_LV_USE_LOG is not set
+# Apagadas en la referencia; estaban en `y` sólo aquí.
+# CONFIG_LV_USE_FONT_COMPRESSED is not set
+# CONFIG_LV_USE_IMGFONT is not set
+# CONFIG_LV_DEMO_MUSIC_AUTO_PLAY is not set
+# Las demos quedan como en la referencia. No aportan al producto y son candidatas
+# de ahorro de flash en P01, con medición antes/después.
 CONFIG_LV_USE_DEMO_WIDGETS=y
 CONFIG_LV_USE_DEMO_BENCHMARK=y
 CONFIG_LV_USE_DEMO_STRESS=y
 CONFIG_LV_USE_DEMO_MUSIC=y
-CONFIG_LV_DEMO_MUSIC_AUTO_PLAY=y
+
+# CONFIG_EXAMPLE_LVGL_PORT_TASK_CORE y CONFIG_EXAMPLE_LVGL_PORT_AVOID_TEAR_ENABLE
+# se eliminaron en P00: ningún Kconfig del proyecto define esos símbolos y ningún
+# archivo los usa. Venían del ejemplo de Waveshare. El core de la tarea LVGL y el
+# anti-tearing se deciden hoy en main/waveshare_amoled_lcd_port.cpp; si vuelven a
+# ser configurables, hay que declararlos en main/Kconfig.projbuild primero.
