@@ -20,13 +20,16 @@ DATASET_ROOT ?= $(REPO_ROOT)/python
 
 TILE_SRC := $(FW_ROOT)/components/tile_reader
 RES_SRC  := $(FW_ROOT)/components/res_metrics
+# Componente compartido con el piloto (esp/components).
+SHARED_SRC := $(abspath $(FW_ROOT)/../components/ruptela_framing)
 SHIM_SRC := $(CURDIR)/host_shim
 
-INCLUDES := -I$(SHIM_SRC) -I$(TILE_SRC) -I$(RES_SRC)/include -I$(CURDIR)
+INCLUDES := -I$(SHIM_SRC) -I$(TILE_SRC) -I$(RES_SRC)/include \
+            -I$(SHARED_SRC)/include -I$(CURDIR)
 DEFINES  := -DHOST_MOUNT_POINT='"$(DATASET_ROOT)"' \
             -DGOLDEN_PATH='"fixtures/tile_reader_baseline.golden"'
 
-TESTS := test_tile_reader_baseline test_res_stats
+TESTS := test_tile_reader_baseline test_res_stats test_ruptela_framing
 
 .PHONY: test all update-golden clean check-dataset
 
@@ -35,6 +38,7 @@ all: $(TESTS)
 test: check-dataset $(TESTS)
 	./test_tile_reader_baseline
 	./test_res_stats
+	./test_ruptela_framing
 
 check-dataset:
 	@test -d "$(DATASET_ROOT)/tiles" || { \
@@ -53,6 +57,12 @@ test_tile_reader_baseline: test_tile_reader_baseline.c \
 
 # res_stats es C puro sin dependencias de ESP-IDF: no necesita shims.
 test_res_stats: test_res_stats.c $(RES_SRC)/res_stats.c
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
+
+# Framing compartido con el piloto, también C puro.
+test_ruptela_framing: test_ruptela_framing.c \
+                      $(SHARED_SRC)/nmea_framer.c \
+                      $(SHARED_SRC)/imei_scanner.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
 
 clean:
