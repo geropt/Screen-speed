@@ -25,20 +25,22 @@ UI_SRC   := $(FW_ROOT)/components/ui_model
 # Componente compartido con el piloto (esp/components).
 SHARED_SRC := $(abspath $(FW_ROOT)/../components/ruptela_framing)
 OUTBOX_SRC := $(abspath $(FW_ROOT)/../components/outbox)
+PAIR_SRC := $(abspath $(FW_ROOT)/../components/pairing)
 CAPSULE_SRC := $(abspath $(FW_ROOT)/../components/map_capsule)
 # Cápsula generada para la prueba de equivalencia; se construye desde el dataset.
 CAPSULE_FILE ?= $(CURDIR)/build/mapa.cap
 SHIM_SRC := $(CURDIR)/host_shim
 
 INCLUDES := -I$(SHIM_SRC) -I$(MATCH_SRC)/include -I$(RES_SRC)/include -I$(VS_SRC)/include -I$(UI_SRC)/include \
-            -I$(SHARED_SRC)/include -I$(OUTBOX_SRC)/include -I$(CAPSULE_SRC)/include -I$(CURDIR)
+            -I$(SHARED_SRC)/include -I$(OUTBOX_SRC)/include -I$(CAPSULE_SRC)/include -I$(PAIR_SRC)/include -I$(CURDIR)
 DEFINES  := -DDATASET_DIR='"$(DATASET_ROOT)"' \
             -DGOLDEN_PATH='"fixtures/tile_reader_baseline.golden"'
 
 TESTS := test_map_match_equivalence test_map_match_robustness \
          test_res_stats test_ruptela_framing test_outbox \
          test_backup_policy test_ruptela_vectors test_capsule_equivalence \
-         test_map_installer test_vehicle_state test_ui_model
+         test_map_installer test_vehicle_state test_ui_model \
+         test_pairing
 
 .PHONY: test all clean check-dataset
 
@@ -56,6 +58,7 @@ test: check-dataset $(TESTS)
 	./test_map_installer
 	./test_vehicle_state
 	./test_ui_model
+	./test_pairing
 
 check-dataset:
 	@test -d "$(DATASET_ROOT)/tiles" || { \
@@ -102,6 +105,10 @@ test_capsule_equivalence: test_capsule_equivalence.c $(MATCH_SRC)/map_match.c \
 # Instalador: inyección de fallas en cada transición persistente.
 test_map_installer: test_map_installer.c $(CAPSULE_SRC)/map_installer.c \
                    $(CAPSULE_SRC)/map_capsule.c
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
+
+# Pairing: contratos de vinculación y sesión.
+test_pairing: test_pairing.c $(PAIR_SRC)/pairing.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
 
 # Outbox de telemetría: pendiente / en vuelo / confirmado.
