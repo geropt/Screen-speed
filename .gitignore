@@ -8,6 +8,7 @@ venv/
 
 # ESP-IDF
 build/
+build_*/
 .cache/
 managed_components/
 dependencies.lock
@@ -19,3 +20,10 @@ esp/starlink_pilot/sdkconfig.old
 *.swp
 .idea/
 .vscode/
+
+# Binarios de pruebas en host (esp/*/host_tests)
+esp/Firmware/host_tests/test_*
+!esp/Firmware/host_tests/test_*.c
+esp/starlink_pilot/host_tests/test_ruptela_io_parser
+esp/starlink_pilot/host_tests/test_ruptela_proto
+*.dSYM/
