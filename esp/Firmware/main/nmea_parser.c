@@ -13,6 +13,8 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nmea_parser.h"
+#include "nmea_framer.h"
+#include "res_metrics.h"
 
 /**
  * @brief NMEA Parser runtime buffer size
@@ -62,6 +64,18 @@ typedef struct {
     uint8_t baud_idx;                              /*!< Index into nmea_baud_candidates */
     bool baud_locked;                              /*!< True once a valid checksum has been seen */
     TickType_t last_valid_tick;                    /*!< Tick of the last statement with a valid checksum */
+    /* P02a: el framing dejó de depender de '\n' / NUL como frontera de
+     * transporte. Los bytes crudos entran acá y salen sentencias completas con
+     * checksum ya validado. Implementación compartida con el piloto en
+     * esp/components/ruptela_framing. */
+    nmea_framer_t framer;                          /*!< Framer de sentencias, binario-seguro */
+    /* Buffer propio para entregar la sentencia al parseo de campos. NO se puede
+     * reusar `buffer`: ahí están los bytes crudos que el framer todavía está
+     * recorriendo cuando invoca el callback, y sobrescribirlos corrompería el
+     * resto del bloque leído. */
+    uint8_t sentence_buf[NMEA_FRAMER_MAX_SENTENCE + 2];
+    uint32_t rejected_invalid_fix;                 /*!< RMC con checksum válido y status 'V' */
+    uint32_t rejected_out_of_range;                /*!< RMC con lat/lon no finita o fuera de rango */
 } esp_gps_t;
 
 /**
@@ -454,13 +468,12 @@ out:
  * @brief Parse NMEA statements from GPS receiver
  *
  * @param esp_gps esp_gps_t type object
- * @param len number of bytes to decode
+ * @param data sentencia completa, terminada en '\r' y NUL
  * @return esp_err_t ESP_OK on success, ESP_FAIL on error
  */
-static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
+static esp_err_t gps_decode(esp_gps_t *esp_gps, const uint8_t *data)
 {
-    (void)len; /* no longer used since GPS_UNKNOWN posting was removed */
-    const uint8_t *d = esp_gps->buffer;
+    const uint8_t *d = data;
     while (*d) {
         /* Start of a statement */
         if (*d == '$') {
@@ -563,12 +576,47 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
                  * same struct and ride along with the next post. */
                 if (esp_gps->cur_statement == STATEMENT_RMC) {
                     esp_gps->parsed_statement = 0;
-                    /* Send signal to notify that GPS information has been updated */
-                    esp_event_post_to(esp_gps->event_loop_hdl, ESP_NMEA_EVENT, GPS_UPDATE,
-                                      &(esp_gps->parent), sizeof(gps_t), 100 / portTICK_PERIOD_MS);
+                    /* P02a: publicar sólo después de checksum, estructura y
+                     * validación de campos.
+                     *
+                     * Antes se publicaba cualquier RMC con checksum válido, sin
+                     * mirar el indicador de validez A/V ni las coordenadas. Un
+                     * RMC con status 'V' (receptor sin fix) llega con posición 0
+                     * o con la anterior, y aun así disparaba un barrido completo
+                     * de 9 tiles y actualizaba la pantalla con un dato que el
+                     * propio receptor declara inválido.
+                     *
+                     * Ahora se exige: status 'A', coordenadas finitas y dentro de
+                     * rango. Los rechazos se cuentan para que un log de campo
+                     * muestre la diferencia entre «no llega nada» y «llega
+                     * inválido», que son fallas distintas. El estado de frescura
+                     * y qué mostrar cuando no hay fix válido son de P02b y P03. */
+                    if (!esp_gps->parent.valid) {
+                        esp_gps->rejected_invalid_fix++;
+                    } else if (!isfinite(esp_gps->parent.latitude) ||
+                               !isfinite(esp_gps->parent.longitude) ||
+                               esp_gps->parent.latitude < -90.0f ||
+                               esp_gps->parent.latitude > 90.0f ||
+                               esp_gps->parent.longitude < -180.0f ||
+                               esp_gps->parent.longitude > 180.0f) {
+                        esp_gps->rejected_out_of_range++;
+                    } else {
+                        /* Send signal to notify that GPS information has been updated */
+                        esp_err_t post_err = esp_event_post_to(esp_gps->event_loop_hdl,
+                                                              ESP_NMEA_EVENT, GPS_UPDATE,
+                                                              &(esp_gps->parent), sizeof(gps_t),
+                                                              100 / portTICK_PERIOD_MS);
+                        if (post_err != ESP_OK) {
+                            /* Cola del event loop llena: el fix se pierde. Contarlo
+                             * en lugar de ignorar el retorno, que era lo anterior. */
+                            res_metrics_error(RES_ERR_QUEUE_FULL);
+                            ESP_LOGW(GPS_TAG, "GPS_UPDATE no encolado: %s",
+                                     esp_err_to_name(post_err));
+                        }
+                    }
                 }
             } else {
-                ESP_LOGD(GPS_TAG, "CRC Error for statement:%s", esp_gps->buffer);
+                ESP_LOGD(GPS_TAG, "CRC Error for statement:%s", (const char *)data);
             }
             /* Unknown statements (the Ruptela `###IMEI...` marker, $GNGNS/$GNGST,
              * binary I/O frames) arrive several times per second. Posting a
@@ -615,42 +663,76 @@ static esp_err_t gps_decode(esp_gps_t *esp_gps, size_t len)
 }
 
 /**
- * @brief Handle when a pattern has been detected by uart
+ * @brief Entrega de una sentencia completa y con checksum válido.
  *
- * @param esp_gps esp_gps_t type object
+ * La invoca el framer compartido. El texto llega desde '$' hasta el segundo
+ * dígito del checksum, sin CR/LF. Se le agrega un '\r' porque la máquina de
+ * estados de `gps_decode` cierra la sentencia en ese carácter; así el parseo de
+ * campos queda idéntico a la línea base y este cambio se limita al transporte.
+ *
+ * El checksum se verifica dos veces: en el framer, que decide si la sentencia
+ * existe, y en `gps_decode`, que lo recalcula mientras extrae los campos. Es a
+ * propósito: mantiene el parseo de campos sin tocar. La verificación redundante
+ * se saca cuando el parseo de campos se extraiga, en P02b.
  */
-static void esp_handle_uart_pattern(esp_gps_t *esp_gps)
+static void on_nmea_sentence(void *ctx, const char *sentence, size_t len)
 {
-    int pos = uart_pattern_pop_pos(esp_gps->uart_port);
-    if (pos != -1) {
-        /* Read up to the pattern (include '\n'), in chunks bounded by the
-         * runtime buffer. `pos` comes from the ring buffer and can be as
-         * large as CONFIG_NMEA_PARSER_RING_BUFFER_SIZE (1024) when no '\n'
-         * arrives for a while — a Ruptela binary I/O frame or the
-         * "###IMEI..." marker — while esp_gps->buffer is only half that
-         * size. A real NMEA sentence is at most ~82 bytes, so it can never
-         * straddle a chunk boundary; only non-NMEA junk ever gets split. */
-        size_t remaining = (size_t)pos + 1;
-        while (remaining > 0) {
-            size_t chunk = remaining;
-            if (chunk > NMEA_PARSER_RUNTIME_BUFFER_SIZE - 1) {
-                chunk = NMEA_PARSER_RUNTIME_BUFFER_SIZE - 1;
-            }
-            int read_len = uart_read_bytes(esp_gps->uart_port, esp_gps->buffer, chunk, 100 / portTICK_PERIOD_MS);
-            if (read_len <= 0) {
-                break;
-            }
-            /* make sure the line is a standard string */
-            esp_gps->buffer[read_len] = '\0';
-            /* Send new line to handle */
-            if (gps_decode(esp_gps, read_len + 1) != ESP_OK) {
-                ESP_LOGW(GPS_TAG, "GPS decode line failed");
-            }
-            remaining -= (size_t)read_len;
+    esp_gps_t *esp_gps = (esp_gps_t *)ctx;
+
+    if (len + 2 > sizeof(esp_gps->sentence_buf)) {
+        res_metrics_error(RES_ERR_UART_FRAMING);
+        return;
+    }
+    memcpy(esp_gps->sentence_buf, sentence, len);
+    esp_gps->sentence_buf[len] = '\r';
+    esp_gps->sentence_buf[len + 1] = '\0';
+
+    if (gps_decode(esp_gps, esp_gps->sentence_buf) != ESP_OK) {
+        ESP_LOGW(GPS_TAG, "GPS decode line failed");
+    }
+}
+
+/**
+ * @brief Drena todos los bytes disponibles de la UART.
+ *
+ * Reemplaza el manejo por detección de patrón '\n'. Motivo: el enlace del
+ * Ruptela es un canal transparente que además transporta records binarios y el
+ * marcador `###IMEI`. Con detección de patrón, un 0x0A dentro de un payload
+ * binario disparaba un evento espurio que partía el frame, y la lectura
+ * terminaba en NUL, de modo que un 0x00 descartaba el resto del bloque.
+ *
+ * Ahora se lee lo que haya, sin esperar ningún delimitador, y las fronteras las
+ * repone el framer por estructura. Se registra además el intervalo entre
+ * drenajes, que es la métrica que el plan pide con p99 <25 ms.
+ */
+static void drain_uart(esp_gps_t *esp_gps)
+{
+    res_metrics_mark_interval(RES_CH_UART_DRAIN);
+
+    while (1) {
+        size_t avail = 0;
+        if (uart_get_buffered_data_len(esp_gps->uart_port, &avail) != ESP_OK) {
+            res_metrics_error(RES_ERR_UART_FRAMING);
+            return;
         }
-    } else {
-        ESP_LOGW(GPS_TAG, "Pattern Queue Size too small");
-        uart_flush_input(esp_gps->uart_port);
+        if (avail == 0) {
+            return;
+        }
+        size_t chunk = avail;
+        if (chunk > NMEA_PARSER_RUNTIME_BUFFER_SIZE - 1) {
+            chunk = NMEA_PARSER_RUNTIME_BUFFER_SIZE - 1;
+        }
+        /* Timeout 0: no bloquear nunca dentro del drenaje. Los bytes ya están en
+         * el ring, así que no hay nada que esperar. */
+        int read_len = uart_read_bytes(esp_gps->uart_port, esp_gps->buffer, chunk, 0);
+        if (read_len <= 0) {
+            return;
+        }
+        /* Sin terminador NUL y sin buscar delimitadores: bytes crudos al framer.
+         * Notar que el propio framer llama a on_nmea_sentence, que reusa
+         * esp_gps->buffer; por eso se copia la sentencia antes de decodificar y
+         * este bucle vuelve a pedir datos recién después. */
+        nmea_framer_feed(&esp_gps->framer, esp_gps->buffer, (size_t)read_len);
     }
 }
 
@@ -663,37 +745,54 @@ static void nmea_parser_task_entry(void *arg)
 {
     esp_gps_t *esp_gps = (esp_gps_t *)arg;
     uart_event_t event;
+    res_metrics_watch_task("nmea", NULL);
     while (1) {
         if (xQueueReceive(esp_gps->event_queue, &event, pdMS_TO_TICKS(200))) {
             switch (event.type) {
             case UART_DATA:
+                /* P02a: antes esta rama estaba vacía y la lectura dependía por
+                 * completo de UART_PATTERN_DET con '\n'. Ahora es el camino
+                 * normal de drenaje. */
+                drain_uart(esp_gps);
                 break;
             case UART_FIFO_OVF:
                 ESP_LOGW(GPS_TAG, "HW FIFO Overflow");
+                res_metrics_error(RES_ERR_UART_OVERFLOW);
                 uart_flush(esp_gps->uart_port);
                 xQueueReset(esp_gps->event_queue);
+                /* Se perdieron bytes: lo que venga no continúa la sentencia a
+                 * medio armar. Descartarla en lugar de pegar dos mitades que no
+                 * son consecutivas. */
+                nmea_framer_discard_partial(&esp_gps->framer);
                 break;
             case UART_BUFFER_FULL:
                 ESP_LOGW(GPS_TAG, "Ring Buffer Full");
+                res_metrics_error(RES_ERR_UART_OVERFLOW);
                 uart_flush(esp_gps->uart_port);
                 xQueueReset(esp_gps->event_queue);
+                nmea_framer_discard_partial(&esp_gps->framer);
                 break;
             case UART_BREAK:
                 ESP_LOGW(GPS_TAG, "Rx Break");
+                res_metrics_error(RES_ERR_UART_FRAMING);
+                nmea_framer_discard_partial(&esp_gps->framer);
                 break;
             case UART_PARITY_ERR:
                 ESP_LOGE(GPS_TAG, "Parity Error");
+                res_metrics_error(RES_ERR_UART_FRAMING);
                 break;
             case UART_FRAME_ERR:
                 ESP_LOGE(GPS_TAG, "Frame Error");
-                break;
-            case UART_PATTERN_DET:
-                esp_handle_uart_pattern(esp_gps);
+                res_metrics_error(RES_ERR_UART_FRAMING);
                 break;
             default:
                 ESP_LOGW(GPS_TAG, "unknown uart event type: %d", event.type);
                 break;
             }
+        } else {
+            /* Timeout de cola: drenar igual. Un evento perdido o una cola llena
+             * no puede dejar bytes indefinidamente en el ring. */
+            drain_uart(esp_gps);
         }
         /* Baud auto-detect. Checked every iteration, not only on a queue
          * timeout: at the wrong baud rate the UART still produces a steady
@@ -789,11 +888,15 @@ nmea_parser_handle_t nmea_parser_init(const nmea_parser_config_t *config)
         ESP_LOGE(GPS_TAG, "config uart gpio failed");
         goto err_uart_config;
     }
-    /* Set pattern interrupt, used to detect the end of a line */
-    uart_enable_pattern_det_baud_intr(esp_gps->uart_port, '\n', 1, 9, 0, 0);
-    /* Set pattern queue size */
-    uart_pattern_queue_reset(esp_gps->uart_port, config->uart.event_queue_size);
-    uart_flush(esp_gps->uart_port);
+    /* P02a: ya no se habilita la detección de patrón '\n'. El enlace transporta
+     * records binarios y el marcador `###IMEI`, así que un 0x0A dentro de un
+     * payload disparaba eventos espurios que partían el frame. Las fronteras las
+     * repone el framer por estructura. */
+    esp_err_t flush_err = uart_flush(esp_gps->uart_port);
+    if (flush_err != ESP_OK) {
+        ESP_LOGW(GPS_TAG, "uart_flush inicial falló: %s", esp_err_to_name(flush_err));
+    }
+    nmea_framer_init(&esp_gps->framer, on_nmea_sentence, esp_gps);
     /* Create Event loop */
     esp_event_loop_args_t loop_args = {
         .queue_size = NMEA_EVENT_LOOP_QUEUE_SIZE,
@@ -886,13 +989,15 @@ esp_err_t nmea_parser_remove_handler(nmea_parser_handle_t nmea_hdl, esp_event_ha
 esp_err_t nmea_parser_set_baud(nmea_parser_handle_t nmea_hdl, uint32_t baud_rate)
 {
     esp_gps_t *esp_gps = (esp_gps_t *)nmea_hdl;
-    uart_disable_pattern_det_intr(esp_gps->uart_port);
     esp_err_t err = uart_set_baudrate(esp_gps->uart_port, baud_rate);
     if (err != ESP_OK) {
         return err;
     }
     esp_gps->baud_rate = baud_rate;
-    uart_flush_input(esp_gps->uart_port);
+    err = uart_flush_input(esp_gps->uart_port);
+    if (err != ESP_OK) {
+        ESP_LOGW(GPS_TAG, "uart_flush_input falló al cambiar baud: %s", esp_err_to_name(err));
+    }
     xQueueReset(esp_gps->event_queue);
     /* Discard any statement fragment left over from the previous baud rate */
     esp_gps->item_pos = 0;
@@ -900,8 +1005,9 @@ esp_err_t nmea_parser_set_baud(nmea_parser_handle_t nmea_hdl, uint32_t baud_rate
     esp_gps->asterisk = 0;
     esp_gps->crc = 0;
     esp_gps->parsed_statement = 0;
-    uart_enable_pattern_det_baud_intr(esp_gps->uart_port, '\n', 1, 9, 0, 0);
-    uart_pattern_queue_reset(esp_gps->uart_port, NMEA_EVENT_LOOP_QUEUE_SIZE);
+    /* Lo acumulado a otro baud es basura: se descarta la sentencia parcial y se
+     * limpian los contadores, que corresponden al enlace anterior. */
+    nmea_framer_reset(&esp_gps->framer);
     return ESP_OK;
 }
 
