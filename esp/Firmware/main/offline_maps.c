@@ -14,6 +14,8 @@
 #include <string.h>
 #include "nmea_parser.h"
 #include "vehicle_state.h"
+#include "ui_model.h"
+#include "ui_presenter.h"
 #include "res_metrics.h"
 
 #define YEAR_BASE (2000) // date in GPS starts from 2000
@@ -38,8 +40,10 @@ static QueueHandle_t s_fix_mailbox;
 #define SIGNAL_QUEUE_DEPTH 8
 static QueueHandle_t s_signal_queue;
 
-/* Estado del vehículo. Dueño único: la tarea principal. Nadie más lo toca. */
+/* Estado del vehículo y modelo de presentación. Dueño único: la tarea
+ * principal. Nadie más los toca. */
 static vehicle_state_t s_vehicle;
+static ui_model_state_t s_ui;
 
 /* Disponibilidad de la tarjeta. La escribe la tarea que vigila el montaje y la
  * lee la tarea principal para no intentar 9 aperturas de tile por fix cuando no
@@ -220,23 +224,13 @@ static void log_state_periodically(const vehicle_snapshot_t *snap)
     }
 }
 
-static void calculation_task(void *pvParameter)
-{
-    (void)pvParameter;
-    vTaskDelay(pdMS_TO_TICKS(2000)); // initial delay
-
-    while (1)
-    {
-        calculate_threshold();
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-}
-
 void app_main(void)
 {
     res_metrics_init();
     vehicle_state_config_t vs_cfg = VEHICLE_STATE_CONFIG_DEFAULT();
     vehicle_state_init(&s_vehicle, &vs_cfg);
+    ui_model_config_t ui_cfg = UI_MODEL_CONFIG_DEFAULT();
+    ui_model_init(&s_ui, &ui_cfg);
 
     waveshare_led_init();
     // El splash (logo mykeego + anillo) ya quedo cargado dentro de waveshare_led_init().
@@ -260,10 +254,12 @@ void app_main(void)
     }
     splash_set_progress(40);
 
-    if (xTaskCreate(calculation_task, "calculation_task", 4096, NULL, 5, NULL) != pdTRUE) {
-        ESP_LOGE(TAG, "no se pudo crear calculation_task");
-        res_metrics_error(RES_ERR_ALLOC_FAILED);
-    }
+    /* P03: `calculation_task` desapareció. Existía sólo para llamar cada 100 ms a
+     * `calculate_threshold()`, que decidía el exceso de velocidad dentro del código
+     * visual. Esa decisión ahora es lógica pura en components/ui_model, evaluada en
+     * el mismo lugar donde se arma el modelo, así que la tarea no tiene razón de
+     * ser: una tarea menos, y la alerta pasa a ser probable en host.
+     */
 
     /* NMEA parser configuration. Initial baud rate comes from
      * CONFIG_NMEA_PARSER_UART_BAUD_RATE; the parser auto-probes between
@@ -310,42 +306,55 @@ void app_main(void)
         vehicle_snapshot_t snap;
         vehicle_state_snapshot(&s_vehicle, mono_ms(), &snap);
 
-        /* La velocidad se muestra con el estado válido, sin esperar el matching.
-         * Presentar «vencido» y «desconocido» de forma distinta en pantalla es de
-         * P03; acá el dato ya viaja con su edad. */
-        if (snap.fix_state == VS_FRESH) {
-            set_var_current_speed_value((int32_t)snap.speed_kmh);
+        /* Si el IMEI cambió, lo acumulado por el presenter es de otro vehículo. */
+        static uint64_t last_epoch;
+        if (last_epoch != 0 && snap.tracker_epoch != last_epoch) {
+            ui_model_invalidate(&s_ui);
         }
+        last_epoch = snap.tracker_epoch;
 
         /* El matching se intenta sólo con un fix fresco de la época actual y con
          * tarjeta montada. Con la tarjeta ausente se evita gastar 9 aperturas
-         * fallidas por fix. */
+         * fallidas por fix. La velocidad NO depende de esto: se muestra igual. */
         if (got_fix && snap.fix_state == VS_FRESH && snap.fix_epoch_current && s_sd_mounted) {
+            ui_match_input_t match = {0};
+            match.tracker_epoch = snap.tracker_epoch;
+
             int speed_limit = 0;
-            char street[128];
+            char street[UI_STREET_MAX];
             street[0] = '\0';
+
             res_metrics_begin(RES_CH_MAP_MATCH);
-            bool matched = get_speed_and_name_at((float)snap.lat, (float)snap.lon,
+            match.matched = get_speed_and_name_at((float)snap.lat, (float)snap.lon,
                                                  snap.cog_deg, snap.speed_kmh,
                                                  &speed_limit, street, sizeof(street));
             res_metrics_end(RES_CH_MAP_MATCH);
 
-            if (matched) {
-                /* El resultado se calculó con esta época; si el IMEI cambió
-                 * mientras se leían tiles, hay que descartarlo en lugar de
+            if (match.matched) {
+                match.limit_kmh = speed_limit;
+                match.has_limit = (speed_limit > 0);
+                match.anonymous = (street[0] == '\0');
+                strncpy(match.street, street, UI_STREET_MAX - 1);
+                /* La época actual se vuelve a leer: si cambió mientras se leían
+                 * tiles, ui_model_on_match descarta el resultado en lugar de
                  * mostrar el límite de la calle del vehículo anterior. */
-                if (s_vehicle.tracker_epoch == snap.tracker_epoch) {
-                    ESP_LOGD(TAG, "límite %d km/h en %s", speed_limit, street);
-                    set_street_name(street);
-                    set_var_speed_limit_value(speed_limit);
-                } else {
-                    ESP_LOGW(TAG, "resultado de mapa descartado: cambió la época");
-                }
+                ui_model_on_match(&s_ui, snap.mono_ms, &match, s_vehicle.tracker_epoch);
             } else {
-                ESP_LOGD(TAG, "sin datos de mapa para esta posición");
-                // No se borra el ultimo limite conocido, por pedido del cliente.
+                /* No borra el último límite conocido —el cliente lo pidió— pero
+                 * tampoco refresca su marca, así que envejece hasta declararse
+                 * vencido. */
+                ui_model_on_no_match(&s_ui, snap.mono_ms);
             }
         }
+
+        /* Un solo lugar arma lo que hay que mostrar, y el presenter lo escribe. */
+        ui_model_t model;
+        ui_model_build(&s_ui, &snap, s_sd_mounted, &model);
+        if (got_fix) {
+            /* Arma la traza: se cierra en el callback de DMA del panel. */
+            ui_presenter_note_fix_received(fix_msg.mono_ms);
+        }
+        ui_presenter_publish(&model);
 
         log_state_periodically(&snap);
     }

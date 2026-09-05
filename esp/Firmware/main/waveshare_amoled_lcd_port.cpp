@@ -19,6 +19,7 @@
 #include "board_waveshare_175.h"
 #include "board_i2c.h"
 #include "res_metrics.h"
+#include "ui_presenter.h"
 #include "ui/ui.h"
 #include "splash.h"
 
@@ -92,6 +93,9 @@ static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_
      * límite, y este callback ya llamaba a lv_disp_flush_ready(), que vive en
      * flash. */
     res_metrics_end(RES_CH_LCD_FLUSH);
+    /* Cierra la traza recepción→snapshot→flush. No toca widgets: es la única
+     * excepción admitida a «la UI es el único escritor». */
+    ui_presenter_note_flush_done();
     lv_disp_flush_ready(disp_driver);
     return false;
 }
@@ -227,6 +231,10 @@ static void lvgl_port_task(void *arg)
         {
             res_metrics_begin(RES_CH_LVGL_TICK);
             task_delay_ms = lv_timer_handler();
+            /* P03: el presenter es el único escritor de widgets y corre acá, con
+             * el mutex ya tomado. Va ANTES de ui_tick() porque publica las
+             * variables de flow que el código generado por EEZ pinta enseguida. */
+            ui_presenter_tick();
             ui_tick();
             res_metrics_end(RES_CH_LVGL_TICK);
             // Release the mutex
@@ -377,6 +385,11 @@ esp_err_t waveshare_led_init()
 
     lvgl_mux = xSemaphoreCreateMutex();
     assert(lvgl_mux);
+
+    if (ui_presenter_init() != ESP_OK) {
+        ESP_LOGE(TAG, "no se pudo crear el buzon del presenter");
+        res_metrics_error(RES_ERR_ALLOC_FAILED);
+    }
     
     ESP_LOGI(TAG, "Display LVGL demos");
     // Lock the mutex due to the LVGL APIs are not thread-safe

@@ -1,71 +1,42 @@
 #include "dynamic.h"
 #include "screens.h"
 #include "eez-flow.h"
-#include "waveshare_amoled_lcd_port.h"  // lvgl_lock / lvgl_unlock
 #include <stdio.h>
 #include "esp_log.h"
-#include "time.h"
 
-// Periodo de un ciclo completo (apagado->encendido->apagado) del titileo, en ms.
-#define OVERSPEED_RING_BLINK_MS  300
+/* P03: este archivo ya no decide nada.
+ *
+ * Antes tenía la tolerancia y la alerta de exceso —`calculate_threshold()` leía
+ * las variables de la UI, comparaba y prendía el titileo del anillo— mezcladas con
+ * la animación. Eso no se podía probar sin una pantalla, y además convertía al
+ * código visual en un segundo escritor de widgets junto a la tarea principal.
+ *
+ * Ahora:
+ *  - la decisión de exceso, con histéresis y con las reglas de qué datos habilitan
+ *    una alerta, vive en components/ui_model y tiene pruebas en host;
+ *  - la escritura de widgets, incluido el anillo, vive en main/ui_presenter.c y
+ *    corre en la tarea de LVGL;
+ *  - `set_street_name()` queda para compatibilidad de la firma pública, pero ya
+ *    nadie del firmware la usa: el renglón de la calle lo escribe el presenter.
+ */
 
-static bool s_ring_blinking = false;
-
-static void ring_opa_anim_cb(void *obj, int32_t v)
-{
-    lv_obj_set_style_arc_opa((lv_obj_t *)obj, (lv_opa_t)v, LV_PART_INDICATOR);
-}
-
-// Prende o apaga el titileo del anillo de exceso de velocidad. Idempotente:
-// llamar con el mismo estado no reinicia la animacion.
-static void update_overspeed_ring(bool overspeed)
-{
-    if (overspeed == s_ring_blinking)
-        return;
-    s_ring_blinking = overspeed;
-
-    if (!lvgl_lock(-1))
-        return;
-
-    lv_anim_del(objects.overspeed_ring, ring_opa_anim_cb);
-
-    if (overspeed)
-    {
-        lv_anim_t a;
-        lv_anim_init(&a);
-        lv_anim_set_var(&a, objects.overspeed_ring);
-        lv_anim_set_exec_cb(&a, ring_opa_anim_cb);
-        lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
-        lv_anim_set_time(&a, OVERSPEED_RING_BLINK_MS);
-        lv_anim_set_playback_time(&a, OVERSPEED_RING_BLINK_MS);
-        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-        lv_anim_start(&a);
-    }
-    else
-    {
-        lv_obj_set_style_arc_opa(objects.overspeed_ring, LV_OPA_TRANSP, LV_PART_INDICATOR);
-    }
-
-    lvgl_unlock();
-}
+static const char *TAG = "DYNAMIC";
 
 void set_street_name(const char *street_name)
 {
-    // lv_label_set_text toca la lista de objetos de LVGL, que no es thread-safe, y
-    // esta funcion se llama desde la tarea principal mientras la tarea de LVGL
-    // corre lv_timer_handler(). Sin el mutex las dos escriben el mismo widget.
-    // El resto de update_overspeed_ring ya lo tomaba; esta ruta era la excepcion.
-    if (!lvgl_lock(-1))
-        return;
-    lv_label_set_text(objects.street_name, street_name);
-    lvgl_unlock();
+    /* Ruta obsoleta. Escribir el widget desde acá volvería a introducir un segundo
+     * escritor fuera de la tarea de LVGL, que es lo que P03 eliminó. Se deja el
+     * símbolo para no romper compilaciones ajenas y se avisa una vez. */
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        ESP_LOGW(TAG, "set_street_name() está obsoleta: la calle la escribe ui_presenter");
+    }
+    (void)street_name;
 }
 
 void calculate_threshold(void)
 {
-    int limit = get_var_speed_limit_value();
-    int cur_speed = get_var_current_speed_value();
-
-    bool overspeed = (limit > 0) && (cur_speed > limit);
-    update_overspeed_ring(overspeed);
+    /* Obsoleta por la misma razón: la decisión de exceso ahora es lógica pura en
+     * components/ui_model, evaluada con el estado del vehículo y sus edades. */
 }
