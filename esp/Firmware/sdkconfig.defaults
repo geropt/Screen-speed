@@ -3,7 +3,12 @@ CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# 16 MiB: la tabla de particiones (partitions.csv) suma exactamente 0x1000000 con
+# dos slots de app de 3 MiB. Un default de 8 MiB hacía que un clon nuevo, sin
+# `sdkconfig`, generara una configuración incompatible con esa tabla. El sdkconfig
+# en uso ya declaraba 16 MiB; esto sólo unifica el default. Pendiente de P01:
+# confirmar el chip real con `esptool flash_id` en la unidad.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_RODATA=y
 CONFIG_SPIRAM_SPEED_80M=y
