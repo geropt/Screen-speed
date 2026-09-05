@@ -30,6 +30,9 @@ OTA_SRC := $(abspath $(FW_ROOT)/../components/ota_policy)
 CAPSULE_SRC := $(abspath $(FW_ROOT)/../components/map_capsule)
 # Cápsula generada para la prueba de equivalencia; se construye desde el dataset.
 CAPSULE_FILE ?= $(CURDIR)/build/mapa.cap
+# Streams reconstruidos de las capturas de campo, para el replay de trayectorias.
+CAPTURAS := pana2 lugnes panamericana
+STREAMS  := $(CAPTURAS:%=$(CURDIR)/build/%.bin)
 SHIM_SRC := $(CURDIR)/host_shim
 
 INCLUDES := -I$(SHIM_SRC) -I$(MATCH_SRC)/include -I$(RES_SRC)/include -I$(VS_SRC)/include -I$(UI_SRC)/include \
@@ -41,6 +44,7 @@ TESTS := test_map_match_equivalence test_map_match_robustness \
          test_res_stats test_ruptela_framing test_outbox \
          test_backup_policy test_ruptela_vectors test_capsule_equivalence \
          test_map_installer test_vehicle_state test_ui_model \
+         test_capture_replay test_trajectory_replay \
          test_pairing test_ota_policy
 
 .PHONY: test all clean check-dataset
@@ -61,6 +65,12 @@ test: check-dataset $(TESTS)
 	./test_ui_model
 	./test_pairing
 	./test_ota_policy
+	@for c in $(CAPTURAS); do \
+	    echo "--- captura $$c ---"; \
+	    ./test_capture_replay $(CURDIR)/build/$$c.bin || exit 1; \
+	    ./test_trajectory_replay $(CURDIR)/build/$$c.bin \
+	        --golden fixtures/trayectorias/$$c.golden || exit 1; \
+	done
 
 check-dataset:
 	@test -d "$(DATASET_ROOT)/tiles" || { \
@@ -116,6 +126,22 @@ test_pairing: test_pairing.c $(PAIR_SRC)/pairing.c
 # Política de OTA A/B.
 test_ota_policy: test_ota_policy.c $(OTA_SRC)/ota_policy.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
+
+# Streams reconstruidos desde las capturas de campo.
+$(CURDIR)/build/%.bin: fixtures/capturas/%.log
+	@mkdir -p $(dir $@)
+	python3 $(REPO_ROOT)/tools/capture_to_stream.py $< $@
+
+# Replay de una captura real: framing, IMEI y records de IO, con invariancia al troceo.
+test_capture_replay: test_capture_replay.c $(SHARED_SRC)/nmea_framer.c \
+                     $(SHARED_SRC)/imei_scanner.c $(SHARED_SRC)/ruptela_io_parser.c \
+                     | $(STREAMS)
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
+
+# Replay de trayectorias reales contra el sistema de tiles.
+test_trajectory_replay: test_trajectory_replay.c $(SHARED_SRC)/nmea_framer.c \
+                        $(MATCH_SRC)/map_match.c | $(STREAMS)
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) $(DEFINES) -o $@ $^ -lm
 
 # Outbox de telemetría: pendiente / en vuelo / confirmado.
 test_outbox: test_outbox.c $(OUTBOX_SRC)/outbox.c

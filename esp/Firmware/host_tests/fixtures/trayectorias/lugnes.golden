@@ -1,0 +1,11 @@
+captura=lugnes.bin
+rmc_vistas=381 rmc_sin_fix=0 rmc_no_parseables=0 fixes=381
+resueltos=381 sin_resolver=0 con_limite=365 de_via_anonima=58
+cambios_de_calle=19 cambios_de_limite=20
+tiles_consultados=423 ausentes=7 truncados=0
+calle: Avenida Presidente Sarmiento              132 fixes  limite 40
+calle: Avenida Del Libertador                    118 fixes  limite 60
+calle: Avenida Leopoldo Lugones                   77 fixes  limite 100
+calle: Autopista Arturo Illia                     38 fixes  limite 100
+calle: Ciclovía del Libertador                   16 fixes  limite 0
+calles_distintas=5
