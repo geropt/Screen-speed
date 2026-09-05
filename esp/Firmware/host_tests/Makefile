@@ -21,17 +21,18 @@ DATASET_ROOT ?= $(REPO_ROOT)/python
 TILE_SRC := $(FW_ROOT)/components/tile_reader
 RES_SRC  := $(FW_ROOT)/components/res_metrics
 VS_SRC   := $(FW_ROOT)/components/vehicle_state
+UI_SRC   := $(FW_ROOT)/components/ui_model
 # Componente compartido con el piloto (esp/components).
 SHARED_SRC := $(abspath $(FW_ROOT)/../components/ruptela_framing)
 SHIM_SRC := $(CURDIR)/host_shim
 
-INCLUDES := -I$(SHIM_SRC) -I$(TILE_SRC) -I$(RES_SRC)/include -I$(VS_SRC)/include \
+INCLUDES := -I$(SHIM_SRC) -I$(TILE_SRC) -I$(RES_SRC)/include -I$(VS_SRC)/include -I$(UI_SRC)/include \
             -I$(SHARED_SRC)/include -I$(CURDIR)
 DEFINES  := -DHOST_MOUNT_POINT='"$(DATASET_ROOT)"' \
             -DGOLDEN_PATH='"fixtures/tile_reader_baseline.golden"'
 
 TESTS := test_tile_reader_baseline test_res_stats test_ruptela_framing \
-         test_vehicle_state
+         test_vehicle_state test_ui_model
 
 .PHONY: test all update-golden clean check-dataset
 
@@ -42,6 +43,7 @@ test: check-dataset $(TESTS)
 	./test_res_stats
 	./test_ruptela_framing
 	./test_vehicle_state
+	./test_ui_model
 
 check-dataset:
 	@test -d "$(DATASET_ROOT)/tiles" || { \
@@ -64,6 +66,10 @@ test_res_stats: test_res_stats.c $(RES_SRC)/res_stats.c
 
 # vehicle_state: C puro, el reloj entra por parámetro.
 test_vehicle_state: test_vehicle_state.c $(VS_SRC)/vehicle_state.c
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
+
+# ui_model: presentación pura, depende de vehicle_state sólo por el snapshot.
+test_ui_model: test_ui_model.c $(UI_SRC)/ui_model.c $(VS_SRC)/vehicle_state.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
 
 # Framing compartido con el piloto, también C puro.
