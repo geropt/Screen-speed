@@ -21,6 +21,7 @@ necesariamente la versión instalada en cada unidad.
 | [Plan de implementación](plan-evolucion.md) | P00–P11 con dependencias, tareas concretas, metas y pruebas de aceptación |
 | [Línea base P00](baseline-P00.md) | Dossier ejecutado: commit, toolchain, build limpio con hashes, dataset, defaults corregidos y pendientes de hardware |
 | [Recursos P01](p01-recursos.md) | Extracción de servicios de placa, instrumentación, filas de buffer configurables y comparación estática medida |
+| [Mapas P04](p04-mapas.md) | Matcher extraído con fuente inyectable, map_store con generación y replay de equivalencia contra el golden de P00 |
 | [UI P03](p03-ui.md) | Presenter único escritor, estados de límite y velocidad, alerta con histéresis y traza fix→flush |
 | [Estado P02b](p02b-estado.md) | Estado del vehículo con edad por señal, tracker_epoch, mailbox de fixes y arranque sin tarjeta |
 | [Framing P02a](p02a-framing.md) | Componente compartido del Ruptela, framer NMEA binario-seguro y publicación sólo tras validación |
