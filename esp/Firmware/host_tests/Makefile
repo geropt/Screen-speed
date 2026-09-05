@@ -25,16 +25,19 @@ UI_SRC   := $(FW_ROOT)/components/ui_model
 # Componente compartido con el piloto (esp/components).
 SHARED_SRC := $(abspath $(FW_ROOT)/../components/ruptela_framing)
 OUTBOX_SRC := $(abspath $(FW_ROOT)/../components/outbox)
+CAPSULE_SRC := $(abspath $(FW_ROOT)/../components/map_capsule)
+# Cápsula generada para la prueba de equivalencia; se construye desde el dataset.
+CAPSULE_FILE ?= $(CURDIR)/build/mapa.cap
 SHIM_SRC := $(CURDIR)/host_shim
 
 INCLUDES := -I$(SHIM_SRC) -I$(MATCH_SRC)/include -I$(RES_SRC)/include -I$(VS_SRC)/include -I$(UI_SRC)/include \
-            -I$(SHARED_SRC)/include -I$(OUTBOX_SRC)/include -I$(CURDIR)
+            -I$(SHARED_SRC)/include -I$(OUTBOX_SRC)/include -I$(CAPSULE_SRC)/include -I$(CURDIR)
 DEFINES  := -DDATASET_DIR='"$(DATASET_ROOT)"' \
             -DGOLDEN_PATH='"fixtures/tile_reader_baseline.golden"'
 
 TESTS := test_map_match_equivalence test_map_match_robustness \
          test_res_stats test_ruptela_framing test_outbox \
-         test_backup_policy test_ruptela_vectors \
+         test_backup_policy test_ruptela_vectors test_capsule_equivalence \
          test_vehicle_state test_ui_model
 
 .PHONY: test all clean check-dataset
@@ -49,6 +52,7 @@ test: check-dataset $(TESTS)
 	./test_outbox
 	./test_backup_policy
 	./test_ruptela_vectors
+	./test_capsule_equivalence
 	./test_vehicle_state
 	./test_ui_model
 
@@ -83,6 +87,17 @@ test_vehicle_state: test_vehicle_state.c $(VS_SRC)/vehicle_state.c
 test_ui_model: test_ui_model.c $(UI_SRC)/ui_model.c $(VS_SRC)/vehicle_state.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
 
+# La cápsula se genera desde el mismo dataset que usa el replay de equivalencia.
+$(CAPSULE_FILE): $(DATASET_ROOT)/tiles
+	@mkdir -p $(dir $@)
+	cd $(DATASET_ROOT) && python3 pack_capsule.py tiles/ $@ --region "AMBA" \
+	    --tile-config $(MATCH_SRC)/include/tile_config.h
+
+test_capsule_equivalence: test_capsule_equivalence.c $(MATCH_SRC)/map_match.c \
+                          $(CAPSULE_SRC)/map_capsule.c | $(CAPSULE_FILE)
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) $(DEFINES) \
+	    -DCAPSULE_PATH='"$(CAPSULE_FILE)"' -o $@ $^ -lm
+
 # Outbox de telemetría: pendiente / en vuelo / confirmado.
 test_outbox: test_outbox.c $(OUTBOX_SRC)/outbox.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
@@ -103,4 +118,5 @@ test_ruptela_framing: test_ruptela_framing.c \
 
 clean:
 	rm -f $(TESTS)
+	rm -rf build
 	rm -rf $(TESTS:%=%.dSYM)

@@ -27,3 +27,6 @@ esp/Firmware/host_tests/test_*
 esp/starlink_pilot/host_tests/test_ruptela_io_parser
 esp/starlink_pilot/host_tests/test_ruptela_proto
 *.dSYM/
+
+# Cápsula generada para las pruebas de equivalencia
+esp/Firmware/host_tests/build/
