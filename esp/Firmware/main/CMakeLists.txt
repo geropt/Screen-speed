@@ -1,6 +1,6 @@
 set(srcs "offline_maps.c" nmea_parser.c ui_presenter.c)
 
-file(GLOB_RECURSE UI_SRCS "mykeego_logo.c" "splash.c" "nmea_parser.c" "waveshare_amoled_lcd_port.cpp" "vars.c" "dynamic.c" "ui/*.c" "ui/*.cpp")
+file(GLOB_RECURSE UI_SRCS "backup.c" "mykeego_logo.c" "splash.c" "nmea_parser.c" "waveshare_amoled_lcd_port.cpp" "vars.c" "dynamic.c" "ui/*.c" "ui/*.cpp")
 
 idf_component_register(SRCS ${srcs} ${UI_SRCS}
                        INCLUDE_DIRS "." "ui")

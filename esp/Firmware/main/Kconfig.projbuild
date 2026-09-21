@@ -255,3 +255,74 @@ menu "NMEA Configuration"
     endmenu
 
 endmenu
+
+menu "Respaldo Wi-Fi (P05)"
+
+    config BACKUP_ENABLE
+        bool "Habilitar respaldo de telemetría por Wi-Fi"
+        default y
+        help
+            Tarea propia: records UART → outbox → TCP cmd 68, confirma sólo con ACK 100.
+            No toca LVGL ni la SD. Si el tracker tiene GPRS, no envía.
+
+    config BACKUP_WIFI_SSID
+        string "SSID 2.4 GHz (casa / laboratorio)"
+        default "Personal-916-2.4GHz"
+        depends on BACKUP_ENABLE
+
+    config BACKUP_WIFI_PASSWORD
+        string "Clave del primer SSID"
+        default ""
+        depends on BACKUP_ENABLE
+
+    config BACKUP_WIFI_SSID_2
+        string "SSID 2 (oficina, 2.4 GHz)"
+        default "ClaroRS"
+        depends on BACKUP_ENABLE
+
+    config BACKUP_WIFI_PASSWORD_2
+        string "Clave del segundo SSID"
+        default ""
+        depends on BACKUP_ENABLE
+
+    config BACKUP_WIFI_SSID_3
+        string "SSID 3 (hotspot, 2.4 GHz)"
+        default "iPhone"
+        depends on BACKUP_ENABLE
+
+    config BACKUP_WIFI_PASSWORD_3
+        string "Clave del tercer SSID"
+        default ""
+        depends on BACKUP_ENABLE
+
+    config BACKUP_HOST
+        string "Host TCP Ruptela / flespi"
+        default "46973.flespi.gw"
+        depends on BACKUP_ENABLE
+
+    config BACKUP_PORT
+        int "Puerto TCP"
+        default 29043
+        range 1 65535
+        depends on BACKUP_ENABLE
+
+    config BACKUP_DWELL_MS
+        int "Dwell con GPRS caído antes de conectar (ms)"
+        default 15000
+        range 0 120000
+        depends on BACKUP_ENABLE
+
+    config BACKUP_REQUIRE_IGNITION
+        bool "Exigir ignición (IO 409) para abrir TCP"
+        default n
+        depends on BACKUP_ENABLE
+
+    config BACKUP_LAB_ASSUME_GPRS_DOWN
+        bool "Laboratorio: si GPRS es desconocido, tratarlo como caído"
+        default n
+        depends on BACKUP_ENABLE
+        help
+            El replay del Flipper casi no trae IO 418. Sin esto la política niega
+            siempre. En un vehículo real debe quedar desmarcado.
+
+endmenu

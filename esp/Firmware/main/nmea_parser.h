@@ -231,6 +231,8 @@ typedef void (*nmea_ignition_cb_t)(void *ctx, bool ignition_on);
 typedef void (*nmea_gprs_cb_t)(void *ctx, bool gprs_up);
 /** Marcador `###IMEI`: identidad del tracker. */
 typedef void (*nmea_imei_cb_t)(void *ctx, const char *imei);
+/** Record binario de IO completo, listo para reenviar (cmd 68). */
+typedef void (*nmea_record_cb_t)(void *ctx, const uint8_t *record, size_t len);
 
 /**
  * @brief Registra los consumidores de las señales del canal transparente.
@@ -243,6 +245,14 @@ esp_err_t nmea_parser_set_signal_handlers(nmea_parser_handle_t nmea_hdl,
                                          nmea_gprs_cb_t gprs_cb,
                                          nmea_imei_cb_t imei_cb,
                                          void *ctx);
+
+/**
+ * @brief Consumidor de records binarios de IO.
+ *
+ * Corre en la tarea UART: tiene que encolar y volver. NULL desregistra.
+ */
+esp_err_t nmea_parser_set_record_handler(nmea_parser_handle_t nmea_hdl,
+                                         nmea_record_cb_t record_cb);
 
 /**
  * @brief Get the UART baud rate currently in use

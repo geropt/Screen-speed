@@ -326,26 +326,47 @@ esp_err_t waveshare_led_init()
 
     ESP_LOGI(TAG, "Initialize LVGL library");
     lv_init();
-    /* Dos buffers de dibujo en RAM interna capaz de DMA. La cantidad de filas
-     * sale de menuconfig (116 en la línea base). Un fallo acá no puede pasar
-     * silenciosamente: se cuenta y se registra el tamaño pedido antes del
-     * assert, para que un log de campo diga cuánto faltaba. */
-    const size_t buf_bytes = (size_t)BOARD_LCD_H_RES * LVGL_BUF_HEIGHT * sizeof(lv_color_t);
-    ESP_LOGI(TAG, "buffers de dibujo: %d filas, %u B cada uno (%u B en total)",
-             (int)LVGL_BUF_HEIGHT, (unsigned)buf_bytes, (unsigned)(buf_bytes * 2));
-    lv_color_t *buf1 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, MALLOC_CAP_DMA));
-    lv_color_t *buf2 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, MALLOC_CAP_DMA));
+    /* Dos buffers de dibujo en RAM interna capaz de DMA. Se pide primero el
+     * tamaño de menuconfig (116 en la línea base). Si Wi-Fi/lwip ya se comieron
+     * el bloque contiguo, se baja a 64/48/32 en lugar de reiniciar en loop. */
+    const int row_try[] = { (int)LVGL_BUF_HEIGHT, 64, 48, 32 };
+    int buf_rows = 0;
+    lv_color_t *buf1 = nullptr;
+    lv_color_t *buf2 = nullptr;
+    for (int rows : row_try) {
+        if (rows <= 0 || (buf_rows != 0 && rows >= buf_rows)) {
+            continue;
+        }
+        const size_t buf_bytes = (size_t)BOARD_LCD_H_RES * (size_t)rows * sizeof(lv_color_t);
+        buf1 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, MALLOC_CAP_DMA));
+        buf2 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, MALLOC_CAP_DMA));
+        if (buf1 && buf2) {
+            buf_rows = rows;
+            ESP_LOGI(TAG, "buffers de dibujo: %d filas, %u B cada uno (%u B en total)",
+                     rows, (unsigned)buf_bytes, (unsigned)(buf_bytes * 2));
+            if (rows != (int)LVGL_BUF_HEIGHT) {
+                ESP_LOGW(TAG, "se pidieron %d filas; DMA libre alcanzó para %d (mayor bloque %u B)",
+                         (int)LVGL_BUF_HEIGHT, rows,
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+            }
+            break;
+        }
+        if (buf1) {
+            heap_caps_free(buf1);
+            buf1 = nullptr;
+        }
+        if (buf2) {
+            heap_caps_free(buf2);
+            buf2 = nullptr;
+        }
+    }
     if (!buf1 || !buf2) {
         res_metrics_error(RES_ERR_ALLOC_FAILED);
-        ESP_LOGE(TAG, "sin RAM interna para los buffers de dibujo (%u B x2); "
-                      "mayor bloque DMA libre: %u B",
-                 (unsigned)buf_bytes,
+        ESP_LOGE(TAG, "sin RAM interna para los buffers de dibujo; mayor bloque DMA libre: %u B",
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+        return ESP_ERR_NO_MEM;
     }
-    assert(buf1);
-    assert(buf2);
-    // initialize LVGL draw buffers
-    lv_disp_draw_buf_init(&disp_buf, buf1, buf2, BOARD_LCD_H_RES * LVGL_BUF_HEIGHT);
+    lv_disp_draw_buf_init(&disp_buf, buf1, buf2, BOARD_LCD_H_RES * buf_rows);
 
     ESP_LOGI(TAG, "Register display driver to LVGL");
     lv_disp_drv_init(&disp_drv);

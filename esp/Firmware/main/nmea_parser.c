@@ -79,6 +79,7 @@ typedef struct {
     nmea_ignition_cb_t ignition_cb;
     nmea_gprs_cb_t gprs_cb;
     nmea_imei_cb_t imei_cb;
+    nmea_record_cb_t record_cb;
     void *signal_ctx;
     /* Buffer propio para entregar la sentencia al parseo de campos. NO se puede
      * reusar `buffer`: ahí están los bytes crudos que el framer todavía está
@@ -695,6 +696,14 @@ static void on_io_gprs(bool gprs_up, void *user_ctx)
     }
 }
 
+static void on_io_record(const uint8_t *record, size_t record_len, void *user_ctx)
+{
+    esp_gps_t *esp_gps = (esp_gps_t *)user_ctx;
+    if (esp_gps->record_cb) {
+        esp_gps->record_cb(esp_gps->signal_ctx, record, record_len);
+    }
+}
+
 static void on_imei_found(void *ctx, const char *imei, size_t len)
 {
     (void)len;
@@ -951,6 +960,7 @@ nmea_parser_handle_t nmea_parser_init(const nmea_parser_config_t *config)
      * registrado. */
     ruptela_io_parser_init(&esp_gps->io_parser, on_io_ignition, esp_gps);
     ruptela_io_parser_set_gprs_callback(&esp_gps->io_parser, on_io_gprs);
+    ruptela_io_parser_set_record_callback(&esp_gps->io_parser, on_io_record);
     imei_scanner_init(&esp_gps->imei_scanner, on_imei_found, esp_gps);
     /* Create Event loop */
     esp_event_loop_args_t loop_args = {
@@ -1086,5 +1096,16 @@ esp_err_t nmea_parser_set_signal_handlers(nmea_parser_handle_t nmea_hdl,
     esp_gps->ignition_cb = ignition_cb;
     esp_gps->gprs_cb = gprs_cb;
     esp_gps->imei_cb = imei_cb;
+    return ESP_OK;
+}
+
+esp_err_t nmea_parser_set_record_handler(nmea_parser_handle_t nmea_hdl,
+                                         nmea_record_cb_t record_cb)
+{
+    if (!nmea_hdl) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_gps_t *esp_gps = (esp_gps_t *)nmea_hdl;
+    esp_gps->record_cb = record_cb;
     return ESP_OK;
 }

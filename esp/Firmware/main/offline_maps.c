@@ -14,6 +14,7 @@
 #include <inttypes.h>
 #include <string.h>
 #include "nmea_parser.h"
+#include "backup.h"
 #include "vehicle_state.h"
 #include "ui_model.h"
 #include "ui_presenter.h"
@@ -297,6 +298,11 @@ void app_main(void)
     // Inicializacion completa: fundido del splash hacia la pantalla principal.
     splash_finish();
 
+    err = backup_start(nmea_hdl);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "no se pudo arrancar el respaldo Wi-Fi: %s", esp_err_to_name(err));
+    }
+
     res_metrics_watch_task("main", NULL);
 
     while (1)
@@ -314,6 +320,7 @@ void app_main(void)
 
         vehicle_snapshot_t snap;
         vehicle_state_snapshot(&s_vehicle, mono_ms(), &snap);
+        backup_publish_snapshot(&snap);
 
         /* Si el IMEI cambió, lo acumulado por el presenter es de otro vehículo. */
         static uint64_t last_epoch;

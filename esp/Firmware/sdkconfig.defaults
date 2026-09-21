@@ -39,6 +39,7 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_ESP32S3_SPIRAM_SUPPORT=y
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # --- Compilador y arranque ---
 # La referencia compila con -O2 (PERF) y coloca secciones huérfanas en lugar de
@@ -64,6 +65,20 @@ CONFIG_FATFS_API_ENCODING_ANSI_OEM=y
 # proyecto es 5, que no corresponde a ninguna conexión real.
 # Pendiente de P01: confirmar la variante -G antes de dar GPIO18 por libre.
 CONFIG_NMEA_PARSER_UART_RXD=18
+
+# --- P05 respaldo Wi-Fi ---
+# Mismas redes y host que el piloto starlink_pilot. Las claves van en sdkconfig
+# local (menuconfig), no acá. LAB_ASSUME_GPRS_DOWN es para Flipper; en vehículo
+# real hay que apagarlo.
+CONFIG_BACKUP_ENABLE=y
+CONFIG_BACKUP_WIFI_SSID="Personal-916-2.4GHz"
+CONFIG_BACKUP_WIFI_SSID_2="ClaroRS"
+CONFIG_BACKUP_WIFI_SSID_3="iPhone"
+CONFIG_BACKUP_HOST="46973.flespi.gw"
+CONFIG_BACKUP_PORT=29043
+CONFIG_BACKUP_DWELL_MS=15000
+# CONFIG_BACKUP_REQUIRE_IGNITION is not set
+CONFIG_BACKUP_LAB_ASSUME_GPRS_DOWN=y
 
 # --- LVGL ---
 # LV_COLOR_16_SWAP es obligatorio para este panel QSPI: sin él los colores salen
