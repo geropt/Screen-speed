@@ -28,6 +28,7 @@ OUTBOX_SRC := $(abspath $(FW_ROOT)/../components/outbox)
 PAIR_SRC := $(abspath $(FW_ROOT)/../components/pairing)
 OTA_SRC := $(abspath $(FW_ROOT)/../components/ota_policy)
 CAPSULE_SRC := $(abspath $(FW_ROOT)/../components/map_capsule)
+CFG_SRC := $(FW_ROOT)/components/backup_cfg
 # Cápsula generada para la prueba de equivalencia; se construye desde el dataset.
 CAPSULE_FILE ?= $(CURDIR)/build/mapa.cap
 # Streams reconstruidos de las capturas de campo, para el replay de trayectorias.
@@ -36,7 +37,7 @@ STREAMS  := $(CAPTURAS:%=$(CURDIR)/build/%.bin)
 SHIM_SRC := $(CURDIR)/host_shim
 
 INCLUDES := -I$(SHIM_SRC) -I$(MATCH_SRC)/include -I$(RES_SRC)/include -I$(VS_SRC)/include -I$(UI_SRC)/include \
-            -I$(SHARED_SRC)/include -I$(OUTBOX_SRC)/include -I$(CAPSULE_SRC)/include -I$(PAIR_SRC)/include -I$(OTA_SRC)/include -I$(CURDIR)
+            -I$(SHARED_SRC)/include -I$(OUTBOX_SRC)/include -I$(CAPSULE_SRC)/include -I$(PAIR_SRC)/include -I$(OTA_SRC)/include -I$(CFG_SRC)/include -I$(CURDIR)
 DEFINES  := -DDATASET_DIR='"$(DATASET_ROOT)"' \
             -DGOLDEN_PATH='"fixtures/tile_reader_baseline.golden"'
 
@@ -45,7 +46,7 @@ TESTS := test_map_match_equivalence test_map_match_robustness \
          test_backup_policy test_ruptela_vectors test_capsule_equivalence \
          test_map_installer test_vehicle_state test_ui_model \
          test_capture_replay test_trajectory_replay \
-         test_pairing test_ota_policy
+         test_pairing test_ota_policy test_backup_cfg
 
 .PHONY: test all clean check-dataset
 
@@ -65,6 +66,7 @@ test: check-dataset $(TESTS)
 	./test_ui_model
 	./test_pairing
 	./test_ota_policy
+	./test_backup_cfg
 	@for c in $(CAPTURAS); do \
 	    echo "--- captura $$c ---"; \
 	    ./test_capture_replay $(CURDIR)/build/$$c.bin || exit 1; \
@@ -149,6 +151,10 @@ test_outbox: test_outbox.c $(OUTBOX_SRC)/outbox.c
 
 # Política de permiso del respaldo.
 test_backup_policy: test_backup_policy.c $(OUTBOX_SRC)/backup_policy.c
+	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
+
+# Texto de /sdcard/backup.cfg: host, puerto y redes.
+test_backup_cfg: test_backup_cfg.c $(CFG_SRC)/backup_cfg.c
 	$(CC) $(CFLAGS) $(SANITIZE) $(INCLUDES) -o $@ $^
 
 # Vectores independientes del protocolo: bytes esperados escritos a mano.

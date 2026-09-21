@@ -11,6 +11,7 @@
 #include "esp_err.h"
 #include "nmea_parser.h"
 #include "vehicle_state.h"
+#include "backup_cfg.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +24,13 @@ esp_err_t backup_start(nmea_parser_handle_t nmea_hdl);
 /** Copia acotada del snapshot. La llama la tarea principal; no bloquea. */
 void backup_publish_snapshot(const vehicle_snapshot_t *snap);
 
+/**
+ * Aplica host/puerto/redes parseados (p. ej. de /sdcard/backup.cfg).
+ * Persistente en NVS. Si el endpoint cambia, el socket abierto se cierra.
+ * No lee la SD: el llamador es dueño del archivo.
+ */
+esp_err_t backup_apply_cfg(const backup_cfg_t *cfg);
+
 #else
 
 static inline esp_err_t backup_start(nmea_parser_handle_t nmea_hdl)
@@ -34,6 +42,12 @@ static inline esp_err_t backup_start(nmea_parser_handle_t nmea_hdl)
 static inline void backup_publish_snapshot(const vehicle_snapshot_t *snap)
 {
     (void)snap;
+}
+
+static inline esp_err_t backup_apply_cfg(const backup_cfg_t *cfg)
+{
+    (void)cfg;
+    return ESP_OK;
 }
 
 #endif

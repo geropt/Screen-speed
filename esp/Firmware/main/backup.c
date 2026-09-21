@@ -18,6 +18,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -37,10 +38,18 @@ typedef struct {
     uint8_t len;
 } rec_item_t;
 
+#define BACKUP_NVS_NS "backup"
+
 static QueueHandle_t s_rec_q;
 static SemaphoreHandle_t s_in_mux;
+static SemaphoreHandle_t s_ep_mux;
 static backup_inputs_t s_inputs;
 static bool s_have_inputs;
+static bool s_started;
+
+static char s_host[BACKUP_CFG_HOST_MAX + 1];
+static uint16_t s_port;
+static bool s_ep_dirty;
 
 static outbox_t s_outbox;
 static backup_policy_t s_policy;
@@ -198,10 +207,99 @@ static bool still_allowed(void)
            !conn_waits_cancelled();
 }
 
+static void endpoint_from_kconfig(void)
+{
+    strncpy(s_host, CONFIG_BACKUP_HOST, sizeof(s_host) - 1);
+    s_host[sizeof(s_host) - 1] = '\0';
+    s_port = (uint16_t)CONFIG_BACKUP_PORT;
+}
+
+static void endpoint_load_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(BACKUP_NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    char host[BACKUP_CFG_HOST_MAX + 1];
+    size_t len = sizeof(host);
+    if (nvs_get_str(h, "host", host, &len) == ESP_OK && host[0] != '\0') {
+        strncpy(s_host, host, sizeof(s_host) - 1);
+        s_host[sizeof(s_host) - 1] = '\0';
+    }
+    uint16_t port = 0;
+    if (nvs_get_u16(h, "port", &port) == ESP_OK && port >= 1) {
+        s_port = port;
+    }
+    nvs_close(h);
+}
+
+static void endpoint_save_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(BACKUP_NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGW(TAG, "no se pudo guardar endpoint en NVS");
+        return;
+    }
+    nvs_set_str(h, "host", s_host);
+    nvs_set_u16(h, "port", s_port);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void seed_kconfig_network(const char *ssid, const char *pass)
+{
+    /* Password vacío no pisa NVS: el plan prohíbe credenciales de build y
+     * un flash sin clave no debe borrar la red ya provisionada. */
+    if (!ssid || ssid[0] == '\0' || !pass || pass[0] == '\0') {
+        return;
+    }
+    conn_add_network(ssid, pass);
+}
+
+static void copy_endpoint(char *host, size_t host_sz, uint16_t *port)
+{
+    if (s_ep_mux && xSemaphoreTake(s_ep_mux, pdMS_TO_TICKS(50)) == pdTRUE) {
+        strncpy(host, s_host, host_sz - 1);
+        host[host_sz - 1] = '\0';
+        *port = s_port;
+        xSemaphoreGive(s_ep_mux);
+        return;
+    }
+    strncpy(host, s_host, host_sz - 1);
+    host[host_sz - 1] = '\0';
+    *port = s_port;
+}
+
+static void honor_endpoint_change(void)
+{
+    if (!s_ep_mux) {
+        return;
+    }
+    if (xSemaphoreTake(s_ep_mux, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return;
+    }
+    bool dirty = s_ep_dirty;
+    if (dirty) {
+        s_ep_dirty = false;
+    }
+    xSemaphoreGive(s_ep_mux);
+    if (dirty && s_sock >= 0) {
+        ESP_LOGI(TAG, "endpoint cambió, cierro TCP");
+        close_socket();
+    }
+}
+
 static bool tcp_ensure(uint64_t imei)
 {
     if (s_sock >= 0) {
         return true;
+    }
+    char host[BACKUP_CFG_HOST_MAX + 1];
+    uint16_t port_n = 0;
+    copy_endpoint(host, sizeof(host), &port_n);
+    if (host[0] == '\0' || port_n == 0) {
+        ESP_LOGW(TAG, "sin host/puerto configurados");
+        return false;
     }
     struct addrinfo hints = {
         .ai_family = AF_INET,
@@ -209,13 +307,13 @@ static bool tcp_ensure(uint64_t imei)
     };
     struct addrinfo *res = NULL;
     char port[8];
-    snprintf(port, sizeof(port), "%d", CONFIG_BACKUP_PORT);
+    snprintf(port, sizeof(port), "%u", (unsigned)port_n);
     if (!still_allowed()) {
         return false;
     }
-    int err = getaddrinfo(CONFIG_BACKUP_HOST, port, &hints, &res);
+    int err = getaddrinfo(host, port, &hints, &res);
     if (err != 0 || res == NULL) {
-        ESP_LOGW(TAG, "DNS %s falló: %d", CONFIG_BACKUP_HOST, err);
+        ESP_LOGW(TAG, "DNS %s falló: %d", host, err);
         return false;
     }
     if (!still_allowed()) {
@@ -233,8 +331,7 @@ static bool tcp_ensure(uint64_t imei)
     int nodelay = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
     if (connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
-        ESP_LOGW(TAG, "connect %s:%d errno=%d", CONFIG_BACKUP_HOST,
-                 CONFIG_BACKUP_PORT, errno);
+        ESP_LOGW(TAG, "connect %s:%u errno=%d", host, (unsigned)port_n, errno);
         close(sock);
         freeaddrinfo(res);
         return false;
@@ -242,8 +339,7 @@ static bool tcp_ensure(uint64_t imei)
     freeaddrinfo(res);
     s_sock = sock;
     s_last_tx = xTaskGetTickCount();
-    ESP_LOGI(TAG, "TCP %s:%d IMEI=%" PRIu64, CONFIG_BACKUP_HOST,
-             CONFIG_BACKUP_PORT, imei);
+    ESP_LOGI(TAG, "TCP %s:%u IMEI=%" PRIu64, host, (unsigned)port_n, imei);
     return true;
 }
 
@@ -377,6 +473,7 @@ static void backup_task(void *arg)
 
     while (1) {
         drain_records();
+        honor_endpoint_change();
 
         backup_inputs_t in;
         backup_verdict_t v = evaluate(&in);
@@ -430,11 +527,56 @@ static void backup_task(void *arg)
     }
 }
 
+esp_err_t backup_apply_cfg(const backup_cfg_t *cfg)
+{
+    if (!cfg) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_started || !s_ep_mux) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    bool changed = false;
+    xSemaphoreTake(s_ep_mux, portMAX_DELAY);
+    if (cfg->have_host && strcmp(s_host, cfg->host) != 0) {
+        strncpy(s_host, cfg->host, sizeof(s_host) - 1);
+        s_host[sizeof(s_host) - 1] = '\0';
+        s_ep_dirty = true;
+        changed = true;
+    }
+    if (cfg->have_port && s_port != cfg->port) {
+        s_port = cfg->port;
+        s_ep_dirty = true;
+        changed = true;
+    }
+    if (cfg->have_host || cfg->have_port) {
+        endpoint_save_nvs();
+    }
+    char host_log[BACKUP_CFG_HOST_MAX + 1];
+    uint16_t port_log = s_port;
+    strncpy(host_log, s_host, sizeof(host_log) - 1);
+    host_log[sizeof(host_log) - 1] = '\0';
+    xSemaphoreGive(s_ep_mux);
+
+    for (size_t i = 0; i < cfg->net_count; i++) {
+        if (cfg->nets[i].ssid[0] == '\0' || !cfg->nets[i].have_pass) {
+            continue;
+        }
+        conn_add_network(cfg->nets[i].ssid, cfg->nets[i].pass);
+        ESP_LOGI(TAG, "red %s actualizada", cfg->nets[i].ssid);
+    }
+    ESP_LOGI(TAG, "config aplicada host=%s port=%u redes_archivo=%u%s",
+             host_log, (unsigned)port_log, (unsigned)cfg->net_count,
+             changed ? " (endpoint nuevo)" : "");
+    return ESP_OK;
+}
+
 esp_err_t backup_start(nmea_parser_handle_t nmea_hdl)
 {
     s_rec_q = xQueueCreate(REC_QUEUE_LEN, sizeof(rec_item_t));
     s_in_mux = xSemaphoreCreateMutex();
-    if (!s_rec_q || !s_in_mux) {
+    s_ep_mux = xSemaphoreCreateMutex();
+    if (!s_rec_q || !s_in_mux || !s_ep_mux) {
         return ESP_ERR_NO_MEM;
     }
 
@@ -452,30 +594,30 @@ esp_err_t backup_start(nmea_parser_handle_t nmea_hdl)
 #endif
     backup_policy_init(&s_policy, &pcfg);
 
+    endpoint_from_kconfig();
+
     esp_err_t err = conn_init(NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "conn_init: %s", esp_err_to_name(err));
         return err;
     }
-    if (CONFIG_BACKUP_WIFI_SSID[0]) {
-        conn_add_network(CONFIG_BACKUP_WIFI_SSID, CONFIG_BACKUP_WIFI_PASSWORD);
-    }
-    if (CONFIG_BACKUP_WIFI_SSID_2[0]) {
-        conn_add_network(CONFIG_BACKUP_WIFI_SSID_2, CONFIG_BACKUP_WIFI_PASSWORD_2);
-    }
-    if (CONFIG_BACKUP_WIFI_SSID_3[0]) {
-        conn_add_network(CONFIG_BACKUP_WIFI_SSID_3, CONFIG_BACKUP_WIFI_PASSWORD_3);
-    }
+    endpoint_load_nvs();
+    seed_kconfig_network(CONFIG_BACKUP_WIFI_SSID, CONFIG_BACKUP_WIFI_PASSWORD);
+    seed_kconfig_network(CONFIG_BACKUP_WIFI_SSID_2, CONFIG_BACKUP_WIFI_PASSWORD_2);
+    seed_kconfig_network(CONFIG_BACKUP_WIFI_SSID_3, CONFIG_BACKUP_WIFI_PASSWORD_3);
 
     if (nmea_hdl) {
         nmea_parser_set_record_handler(nmea_hdl, on_record);
     }
 
+    s_started = true;
+
     if (xTaskCreate(backup_task, "backup", 8192, NULL, 3, NULL) != pdTRUE) {
+        s_started = false;
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "host=%s port=%d dwell=%d ms ignición=%s lab_gprs=%s redes=%u",
-             CONFIG_BACKUP_HOST, CONFIG_BACKUP_PORT, CONFIG_BACKUP_DWELL_MS,
+    ESP_LOGI(TAG, "host=%s port=%u dwell=%d ms ignición=%s lab_gprs=%s redes=%u",
+             s_host, (unsigned)s_port, CONFIG_BACKUP_DWELL_MS,
 #if CONFIG_BACKUP_REQUIRE_IGNITION
              "exigida",
 #else

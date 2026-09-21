@@ -13,7 +13,8 @@ dueño de la radio, sin verificar.
 | `backup_policy` — permiso y revocación | Implementado y probado | Sí |
 | Vectores independientes del protocolo | Implementados | Sí |
 | `connectivity_manager` — dueño de la radio | Implementado | **No**: envuelve esp_wifi |
-| Integración en el firmware | **No hecha** | — |
+| `backup_cfg` — texto host/puerto/redes | Implementado y probado | Sí |
+| Integración en el firmware | Tarea backup + `/sdcard/backup.cfg` | Parser sí; radio/TCP no |
 
 La integración quedó afuera a propósito: conectar el respaldo al enlace real sin banco
 de pruebas con IMEI propio significaría competir con el tracker operativo. El plan lo
@@ -135,8 +136,10 @@ segundo consumidor, y en P08 y P09 aparecen dos.
 4. **Retorno 418=1 durante cada etapa**: el plan pide probar que la revocación cancela
    nuevos envíos en DNS, connect, send y ACK. La política ya lo decide y las esperas ya
    son cancelables, pero verificarlo exige el enlace.
-5. **Endpoint, TLS, duplicados y antigüedad**: sin definir. El piloto usa TCP plano
-   contra un endpoint de laboratorio.
+5. **Endpoint, TLS, duplicados y antigüedad**: TLS sigue sin definir. El endpoint
+   ya no va sólo en el binario: Kconfig es fábrica, NVS persiste, y
+   `/sdcard/backup.cfg` lo pisa al montar la tarjeta (`host=`, `port=`,
+   `ssid=`/`password=`). El cliente sigue siendo TCP plano.
 6. **Journal durable**: el outbox vive en RAM, así que un reinicio pierde lo pendiente.
    El plan lo permite —«journal durable sólo si requerido»— pero es una decisión que
    hay que tomar explícitamente, con su tarea y presupuesto.

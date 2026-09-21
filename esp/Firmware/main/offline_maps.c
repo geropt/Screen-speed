@@ -12,6 +12,7 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 #include "nmea_parser.h"
 #include "backup.h"
@@ -146,6 +147,41 @@ static void on_imei(void *ctx, const char *imei)
 
 /* ---------- Tarjeta SD: arranque degradado y recuperación ---------- */
 
+#define BACKUP_CFG_PATH MOUNT_POINT "/backup.cfg"
+#define BACKUP_CFG_MAX  2048
+
+static void try_load_backup_cfg(void)
+{
+#if CONFIG_BACKUP_ENABLE
+    FILE *f = fopen(BACKUP_CFG_PATH, "r");
+    if (!f) {
+        return;
+    }
+    char buf[BACKUP_CFG_MAX + 1];
+    size_t n = fread(buf, 1, BACKUP_CFG_MAX, f);
+    int too_big = (n == BACKUP_CFG_MAX && !feof(f));
+    fclose(f);
+    if (too_big) {
+        ESP_LOGW(TAG, "backup.cfg demasiado grande, ignorado");
+        return;
+    }
+    buf[n] = '\0';
+    backup_cfg_t cfg;
+    backup_cfg_err_t pe = backup_cfg_parse(buf, &cfg);
+    if (pe != BACKUP_CFG_OK) {
+        ESP_LOGW(TAG, "%s inválido: %s", BACKUP_CFG_PATH, backup_cfg_err_name(pe));
+        return;
+    }
+    esp_err_t err = backup_apply_cfg(&cfg);
+    if (err == ESP_ERR_INVALID_STATE) {
+        return;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "no se aplicó backup.cfg: %s", esp_err_to_name(err));
+    }
+#endif
+}
+
 /**
  * @brief Vigila la tarjeta sin reiniciar nada más.
  *
@@ -175,6 +211,7 @@ static void sd_watch_task(void *arg)
                 map_store_set_available(true);
                 ESP_LOGI(TAG, "tarjeta montada; mapas disponibles, generacion %" PRIu64,
                          map_store_generation());
+                try_load_backup_cfg();
             } else {
                 if (!announced_missing) {
                     ESP_LOGW(TAG, "sin tarjeta (%s): se sigue mostrando velocidad, "
@@ -301,6 +338,9 @@ void app_main(void)
     err = backup_start(nmea_hdl);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "no se pudo arrancar el respaldo Wi-Fi: %s", esp_err_to_name(err));
+    }
+    if (s_sd_mounted) {
+        try_load_backup_cfg();
     }
 
     res_metrics_watch_task("main", NULL);

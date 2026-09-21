@@ -35,3 +35,6 @@ esp/*/build_ci/
 # Extractos OSM: GitHub rechaza archivos >100 MB
 *.osm.pbf
 argentina-260819.osm.pbf
+
+# Claves de respaldo Wi-Fi; el ejemplo versionado es backup.cfg.example
+esp/Firmware/backup.cfg

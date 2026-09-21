@@ -1,0 +1,12 @@
+# Copiar a la raíz de la SD como backup.cfg (junto a tiles/).
+# Si el archivo está, actualiza host/puerto y las redes que declare.
+# No commitear un backup.cfg con claves reales.
+
+host=46973.flespi.gw
+port=29043
+
+# ssid=ClaroRS
+# password=
+
+# ssid=Personal-916-2.4GHz
+# password=
