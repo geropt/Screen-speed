@@ -1,0 +1,10 @@
+captura=pana2.bin
+rmc_vistas=449 rmc_sin_fix=0 rmc_no_parseables=0 fixes=449
+resueltos=449 sin_resolver=0 con_limite=449 de_via_anonima=69
+cambios_de_calle=3 cambios_de_limite=7
+tiles_consultados=639 ausentes=0 truncados=0
+calle: Avenida Leopoldo Lugones                  201 fixes  limite 60
+calle: Avenida General Paz                       180 fixes  limite 60
+calle: Acceso Norte                               56 fixes  limite 130
+calle: Acceso                                     12 fixes  limite 60
+calles_distintas=4

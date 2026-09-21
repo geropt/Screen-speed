@@ -8,8 +8,12 @@ venv/
 
 # ESP-IDF
 build/
+build_*/
+.cache/
 managed_components/
 dependencies.lock
+esp/starlink_pilot/sdkconfig
+esp/starlink_pilot/sdkconfig.old
 
 # OS / editor
 .DS_Store
@@ -17,6 +21,20 @@ dependencies.lock
 .idea/
 .vscode/
 
-# Generated caches and map tiles (any depth)
-**/.cache/
-**/tiles/
+# Binarios de pruebas en host (esp/*/host_tests)
+esp/Firmware/host_tests/test_*
+!esp/Firmware/host_tests/test_*.c
+esp/starlink_pilot/host_tests/test_ruptela_io_parser
+esp/starlink_pilot/host_tests/test_ruptela_proto
+*.dSYM/
+
+# Cápsula generada para las pruebas de equivalencia
+esp/Firmware/host_tests/build/
+esp/*/build_ci/
+
+# Extractos OSM: GitHub rechaza archivos >100 MB
+*.osm.pbf
+argentina-260819.osm.pbf
+
+# Claves de respaldo Wi-Fi; el ejemplo versionado es backup.cfg.example
+esp/Firmware/backup.cfg

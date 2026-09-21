@@ -4,11 +4,19 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "board_waveshare_175.h"
+#include "board_i2c.h"
+
+/* P01: los pines, la geometría del panel y la secuencia de inicialización se
+ * movieron a components/board_waveshare_175 sin cambiar ningún valor. Este
+ * archivo queda como el puerto de LVGL: buffers, callbacks, tarea y mutex.
+ *
+ * Se conservan los alias LCD_H_RES / LCD_V_RES porque main/splash.c los usa; son
+ * el mismo número, no una segunda definición. */
 
 #define RUN_APPLICATION_UI      1
 
-#define LCD_HOST        SPI2_HOST
-#define TOUCH_HOST      I2C_NUM_0
+#define LCD_HOST        BOARD_LCD_SPI_HOST
 
 #if CONFIG_LV_COLOR_DEPTH == 32
 #define LCD_BIT_PER_PIXEL (24)
@@ -16,45 +24,14 @@
 #define LCD_BIT_PER_PIXEL (16)
 #endif
 
-#define LCD_BK_LIGHT_ON_LEVEL   1
-#define LCD_BK_LIGHT_OFF_LEVEL  !LCD_BK_LIGHT_ON_LEVEL
-#define PIN_NUM_LCD_CS          (GPIO_NUM_12)
-#define PIN_NUM_LCD_PCLK        (GPIO_NUM_38)
-#define PIN_NUM_LCD_DATA0       (GPIO_NUM_4)
-#define PIN_NUM_LCD_DATA1       (GPIO_NUM_5)
-#define PIN_NUM_LCD_DATA2       (GPIO_NUM_6)
-#define PIN_NUM_LCD_DATA3       (GPIO_NUM_7)
-#define PIN_NUM_LCD_RST         (GPIO_NUM_39)
-#define PIN_NUM_BK_LIGHT        (-1)
+#define LCD_H_RES       BOARD_LCD_H_RES
+#define LCD_V_RES       BOARD_LCD_V_RES
 
-// The pixel number in horizontal and vertical
-#define LCD_H_RES 466
-#define LCD_V_RES 466
+/* Filas por buffer de dibujo. Antes era LCD_V_RES / 4 fijo (116); ahora sale de
+ * menuconfig con 116 como default, así que la línea base no cambia. Ver
+ * components/board_waveshare_175/Kconfig para el costo de cada opción. */
+#define LVGL_BUF_HEIGHT         BOARD_LVGL_BUF_ROWS
 
-#define USE_TOUCH 0
-
-#if USE_TOUCH
-#define PIN_NUM_TOUCH_SCL (GPIO_NUM_14)
-#define PIN_NUM_TOUCH_SDA (GPIO_NUM_15)
-#define PIN_NUM_TOUCH_RST (GPIO_NUM_40)
-#define PIN_NUM_TOUCH_INT (GPIO_NUM_11)
-
-#define I2C_MASTER_NUM (i2c_port_t)1
-#define I2C_MASTER_FREQ_HZ 100000 /*!< I2C master clock frequency */
-#define I2C_MASTER_SDA_IO (gpio_num_t)15
-#define I2C_MASTER_SCL_IO (gpio_num_t)14
-#define Touch_INT (gpio_num_t)11
-#define Touch_RST (gpio_num_t)40
-
-#define I2C_MASTER_TX_BUF_DISABLE   0 /*!< I2C master doesn't need buffer */
-#define I2C_MASTER_RX_BUF_DISABLE   0 /*!< I2C master doesn't need buffer */
-#define I2C_MASTER_TIMEOUT_MS       1000
-#define TOUCH_SENSOR_ADDR           0x5A;
-
-#endif
-
-
-#define LVGL_BUF_HEIGHT         (LCD_V_RES / 4)
 #define LVGL_TICK_PERIOD_MS     2
 #define LVGL_TASK_MAX_DELAY_MS  500
 #define LVGL_TASK_MIN_DELAY_MS  1

@@ -1,0 +1,65 @@
+menu "Placa Waveshare 1.75"
+
+    choice BOARD_LVGL_BUF_ROWS_CHOICE
+        prompt "Filas por buffer de dibujo de LVGL"
+        default BOARD_LVGL_BUF_ROWS_116
+        help
+            Cantidad de filas de cada uno de los dos buffers de dibujo, que se
+            reservan en RAM interna con MALLOC_CAP_DMA.
+
+            La línea base P00 usa 116 filas (466/4): 2 × 466 × 116 × 2 B =
+            216 224 B internos. Con 32 filas el total baja a 59 648 B, o sea
+            156 576 B (152,91 KiB) menos.
+
+            Ese ahorro es aritmética del tamaño del buffer. Cambiar esta opción
+            exige comparar en la placa, con la misma UI y el mismo replay, que la
+            fluidez y los colores no empeoran: menos filas significa más
+            transferencias por refresco. No cambiar esto junto con LVGL, el
+            algoritmo de dibujo o el reloj del panel en el mismo paso.
+
+        config BOARD_LVGL_BUF_ROWS_116
+            bool "116 filas (línea base, 216 224 B)"
+        config BOARD_LVGL_BUF_ROWS_64
+            bool "64 filas (119 296 B)"
+        config BOARD_LVGL_BUF_ROWS_48
+            bool "48 filas (89 472 B)"
+        config BOARD_LVGL_BUF_ROWS_32
+            bool "32 filas (59 648 B)"
+    endchoice
+
+    config BOARD_LVGL_BUF_ROWS
+        int
+        default 116 if BOARD_LVGL_BUF_ROWS_116
+        default 64  if BOARD_LVGL_BUF_ROWS_64
+        default 48  if BOARD_LVGL_BUF_ROWS_48
+        default 32  if BOARD_LVGL_BUF_ROWS_32
+
+    config BOARD_ENABLE_TOUCH
+        bool "Habilitar touch (CST92xx por I2C)"
+        default n
+        help
+            Apagado en la línea base P00: el código del touch está compilado
+            fuera y no se probó en la placa. Al habilitarlo, el touch usa el bus
+            compartido de board_i2c y su ausencia no debe impedir que el HUD
+            muestre velocidad.
+
+            Pendiente antes de darlo por bueno: el fabricante documenta CST9217,
+            el proyecto arrastra dependencia FT5x06 y el código usa
+            TouchDrvCST92xx de SensorLib.
+
+    config BOARD_ENABLE_IMU
+        bool "Habilitar IMU"
+        default n
+        help
+            No habilitar por defecto. El producto no usa la IMU para ninguna
+            función acordada; encenderla sólo agrega consumo, un dueño de bus más
+            y otra fuente de errores.
+
+    config BOARD_ENABLE_AUDIO
+        bool "Habilitar audio"
+        default n
+        help
+            No habilitar por defecto. Igual criterio que la IMU: sin función
+            acordada, no entra al arranque.
+
+endmenu

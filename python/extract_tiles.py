@@ -8,7 +8,9 @@ from math import floor
 # -----------------------------
 TILE_SIZE = 0.003      # degrees (330 * 270 m approx)
 OUT_DIR = "tiles/"
-CONFIG_FILE_PATH = "../esp/Firmware/components/tile_reader/tile_config.h"
+# P04: tile_reader se dividió en map_match (geometría) y map_store
+# (almacenamiento). Las constantes del formato viven con la geometría.
+CONFIG_FILE_PATH = "../esp/Firmware/components/map_match/include/tile_config.h"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
@@ -58,7 +60,11 @@ class TileWriter:
         for (tx, ty), segments in self.tiles.items():
             tx_name = filename_coord(tx)
             ty_name = filename_coord(ty)
-            filename = (f"{OUT_DIR}/tile_{tx_name}_{ty_name}.bin")
+            # Sharded layout: one subdirectory per tx column so each FAT dir on
+            # the SD card stays small and fopen() on the ESP is fast.
+            subdir = f"{OUT_DIR}/{tx_name}"
+            os.makedirs(subdir, exist_ok=True)
+            filename = (f"{subdir}/tile_{tx_name}_{ty_name}.bin")
             config_file = (f"{CONFIG_FILE_PATH}")
             with open(filename, "wb") as f:
                 

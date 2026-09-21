@@ -169,6 +169,16 @@ menu "NMEA Configuration"
         help
             Size of the ring buffer used for UART Rx channel.
 
+    config NMEA_PARSER_UART_BAUD_RATE
+        int "GPS UART initial baud rate"
+        default 9600
+        help
+            Baud rate to probe first at startup. The firmware auto-detects
+            between 9600 and 115200 by waiting for NMEA sentences with a
+            valid checksum, so this value only picks which one is tried
+            first (Ruptela Pro5-Lite/HCV5-Lite are capped at 9600; Pro5/HCV5
+            default to 115200).
+
     config NMEA_PARSER_TASK_STACK_SIZE
         int "NMEA Parser Task Stack Size"
         range 0 4096
@@ -243,5 +253,88 @@ menu "NMEA Configuration"
                 - Magnetic variation;
 
     endmenu
+
+endmenu
+
+menu "Respaldo Wi-Fi (P05)"
+
+    config BACKUP_ENABLE
+        bool "Habilitar respaldo de telemetría por Wi-Fi"
+        default y
+        help
+            Tarea propia: records UART → outbox → TCP cmd 68, confirma sólo con ACK 100.
+            No toca LVGL ni la SD. Si el tracker tiene GPRS, no envía.
+            Host, puerto y redes se leen de NVS y de /sdcard/backup.cfg.
+
+    config BACKUP_WIFI_SSID
+        string "SSID 2.4 GHz de fábrica (casa / laboratorio)"
+        default "Personal-916-2.4GHz"
+        depends on BACKUP_ENABLE
+        help
+            Sólo se copia a NVS si la clave no está vacía. En la unidad manda
+            /sdcard/backup.cfg y lo ya guardado en NVS.
+
+    config BACKUP_WIFI_PASSWORD
+        string "Clave del primer SSID"
+        default ""
+        depends on BACKUP_ENABLE
+        help
+            Vacío no se copia a NVS (no pisa una clave ya guardada).
+            Para provisionar, usar /sdcard/backup.cfg o menuconfig local.
+
+    config BACKUP_WIFI_SSID_2
+        string "SSID 2 (oficina, 2.4 GHz)"
+        default "ClaroRS"
+        depends on BACKUP_ENABLE
+
+    config BACKUP_WIFI_PASSWORD_2
+        string "Clave del segundo SSID"
+        default ""
+        depends on BACKUP_ENABLE
+
+    config BACKUP_WIFI_SSID_3
+        string "SSID 3 (hotspot, 2.4 GHz)"
+        default "iPhone"
+        depends on BACKUP_ENABLE
+
+    config BACKUP_WIFI_PASSWORD_3
+        string "Clave del tercer SSID"
+        default ""
+        depends on BACKUP_ENABLE
+
+    config BACKUP_HOST
+        string "Host TCP de fábrica (Ruptela / flespi)"
+        default "46973.flespi.gw"
+        depends on BACKUP_ENABLE
+        help
+            Valor de fábrica. En runtime manda NVS y, si existe,
+            /sdcard/backup.cfg (clave host=).
+
+    config BACKUP_PORT
+        int "Puerto TCP de fábrica"
+        default 29043
+        range 1 65535
+        depends on BACKUP_ENABLE
+        help
+            Valor de fábrica. En runtime manda NVS y /sdcard/backup.cfg.
+
+    config BACKUP_DWELL_MS
+        int "Dwell con GPRS caído antes de conectar (ms)"
+        default 15000
+        range 0 120000
+        depends on BACKUP_ENABLE
+
+    config BACKUP_REQUIRE_IGNITION
+        bool "Exigir ignición (IO 409) para abrir TCP"
+        default n
+        depends on BACKUP_ENABLE
+
+    config BACKUP_LAB_ASSUME_GPRS_DOWN
+        bool "Laboratorio: si GPRS es desconocido, tratarlo como caído"
+        default n
+        depends on BACKUP_ENABLE
+        help
+            El replay del Flipper casi no trae IO 418. Sin esto la política niega
+            siempre. En un vehículo real debe quedar desmarcado.
 
 endmenu

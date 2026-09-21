@@ -1,0 +1,124 @@
+# Calificación integrada: corre todo lo que se puede verificar sin hardware.
+#
+# El plan de evolución citaba un workflow `trazabilidad.yml` como evidencia existente;
+# no existía. Este lo reemplaza y hace explícito su alcance: **verde acá no significa
+# que el producto funcione**. Lo que se verifica es lógica, framing, geometría,
+# transacciones y decisiones; lo que NO se verifica es todo lo que necesita la placa.
+name: Verificación
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: Pruebas en host (HUD, piloto, herramientas)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilador y herramientas
+        run: |
+          cc --version
+          make --version | head -1
+          python3 --version
+
+      # El dataset de tiles está en el repositorio, así que los replays de
+      # equivalencia —matcher contra el golden de P00, y cápsula contra directorio—
+      # corren en CI. Son las dos puertas de aceptación de las extracciones de P04
+      # y P07: si una se rompe, el contenedor o el matcher cambiaron resultados.
+      - name: Dataset presente
+        run: |
+          test -d python/tiles || { echo "falta python/tiles"; exit 1; }
+          echo "tiles: $(find python/tiles -type f | wc -l)"
+
+      - name: Suite completa
+        run: ./tools/run_tests.sh
+
+      # Los binarios se compilan con ASan y UBSan, así que un acceso inválido o un
+      # comportamiento indefinido rompe la corrida en lugar de pasar inadvertido.
+      - name: Confirmar que los sanitizers estaban activos
+        run: |
+          grep -q 'fsanitize=address' esp/Firmware/host_tests/Makefile
+          grep -q 'fsanitize=address' esp/starlink_pilot/host_tests/Makefile
+
+  firmware-build:
+    name: Build del firmware (ESP-IDF 5.4.4)
+    runs-on: ubuntu-latest
+    # La imagen oficial de Espressif trae el toolchain fijado, así que la versión de
+    # IDF que compila en CI es la misma que registró la línea base P00.
+    container: espressif/idf:v5.4.4
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar el HUD
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          cd esp/Firmware
+          idf.py -B build_ci build
+
+      - name: Compilar el piloto Starlink
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          cd esp/starlink_pilot
+          idf.py -B build_ci build
+
+      # Alerta de tamaño: el plan fija aviso al 85 % del slot y rechazo si no cabe.
+      # `ota_0` mide 0x300000 = 3 145 728 B.
+      - name: Ocupación del slot de aplicación
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          BIN=esp/Firmware/build_ci/Offline_maps.bin
+          SIZE=$(stat -c %s "$BIN")
+          SLOT=3145728
+          PCT=$(( SIZE * 100 / SLOT ))
+          echo "binario: $SIZE B de $SLOT B ($PCT %)"
+          if [ "$SIZE" -gt "$SLOT" ]; then
+            echo "::error::la imagen no cabe en el slot de aplicación"
+            exit 1
+          fi
+          if [ "$PCT" -ge 85 ]; then
+            echo "::warning::la imagen ocupa $PCT % del slot (umbral de aviso: 85 %)"
+          fi
+
+      # La configuración por defecto tiene que reproducir la de referencia. P00
+      # encontró 25 divergencias, entre ellas una tabla de particiones sin OTA; sin
+      # esta comprobación, volver a divergir no se notaría hasta clonar el repo.
+      - name: Los defaults reproducen la configuración de referencia
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          cd esp/Firmware
+          idf.py -B build_defaults_check -D SDKCONFIG=/tmp/sdkconfig_defaults build >/dev/null
+          python3 - <<'PY'
+          import re, sys
+          def load(p):
+              d = {}
+              for line in open(p):
+                  s = line.strip()
+                  m = re.match(r'^(CONFIG_[A-Za-z0-9_]+)=(.*)$', s)
+                  if m:
+                      d[m.group(1)] = m.group(2); continue
+                  m = re.match(r'^# (CONFIG_[A-Za-z0-9_]+) is not set$', s)
+                  if m:
+                      d[m.group(1)] = '<notset>'
+              return d
+          ref = load('sdkconfig')
+          gen = load('/tmp/sdkconfig_defaults')
+          # IDF_INIT_VERSION es metadato de qué versión generó el archivo.
+          ignore = {'CONFIG_IDF_INIT_VERSION'}
+          diffs = [k for k in set(ref) | set(gen)
+                   if k not in ignore
+                   and ref.get(k, '<absent>') != gen.get(k, '<absent>')]
+          if diffs:
+              print("los defaults divergen de la referencia en:")
+              for k in sorted(diffs):
+                  print(f"  {k}: ref={ref.get(k,'<absent>')} gen={gen.get(k,'<absent>')}")
+              sys.exit(1)
+          print("los defaults reproducen la configuración de referencia")
+          PY

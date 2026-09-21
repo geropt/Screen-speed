@@ -1,0 +1,11 @@
+captura=panamericana.bin
+rmc_vistas=349 rmc_sin_fix=0 rmc_no_parseables=0 fixes=349
+resueltos=346 sin_resolver=3 con_limite=276 de_via_anonima=31
+cambios_de_calle=16 cambios_de_limite=18
+tiles_consultados=506 ausentes=0 truncados=0
+calle: Acceso Norte                              172 fixes  limite 130
+calle: Colectora Acceso Norte                     58 fixes  limite 20
+calle: Avenida Bernabé Márquez                  42 fixes  limite 60
+calle: Avenida Avelino Rolón                     42 fixes  limite 0
+calle: Puente Márquez                            28 fixes  limite 0
+calles_distintas=7

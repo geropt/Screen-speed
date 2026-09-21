@@ -1,9 +1,6 @@
-set(srcs "offline_maps.c" nmea_parser.c "buttons.c" "diag_log.c" "splash.c" "mykeego_logo.c")
+set(srcs "offline_maps.c" nmea_parser.c ui_presenter.c)
 
-# NOTE: this glob is evaluated at CMake configure time. If EEZ Studio generates a
-# new UI/font source, do a Full Clean (or reconfigure) so it gets picked up.
-# (CONFIGURE_DEPENDS is not usable here: ESP-IDF runs this file in script mode.)
-file(GLOB_RECURSE UI_SRCS "waveshare_amoled_lcd_port.cpp" "vars.c" "dynamic.c" "ui/*.c" "ui/*.cpp")
+file(GLOB_RECURSE UI_SRCS "backup.c" "mykeego_logo.c" "splash.c" "nmea_parser.c" "waveshare_amoled_lcd_port.cpp" "vars.c" "dynamic.c" "ui/*.c" "ui/*.cpp")
 
 idf_component_register(SRCS ${srcs} ${UI_SRCS}
                        INCLUDE_DIRS "." "ui")

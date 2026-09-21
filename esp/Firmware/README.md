@@ -1,5 +1,20 @@
 # ESP32 OSM Street-Matching & Speed-Limit Detection Firmware
 
+## Documentación de arquitectura y evolución
+
+La documentación en español del firmware Waveshare ESP32-S3 está en
+[docs/README.md](docs/README.md). Empezar por el
+[blueprint del firmware definitivo](docs/blueprint-firmware.md), el análisis de
+[hardware/RAM/pantalla](docs/hardware-y-memoria.md) y el
+[plan de implementación](docs/plan-evolucion.md). Incluyen UI, Ruptela,
+Wi-Fi/Starlink, mapas desde el teléfono, OTA y criterios de aceptación.
+
+El texto en inglés que sigue es una descripción histórica del funcionamiento.
+Algunos detalles quedaron desactualizados: el lector actual usa tiles de
+**0,003°**, almacenados en `/sdcard/tiles/<lat>/tile_<lat>_<lon>.bin`, y también
+contempla vías sin nombre. Para decisiones de desarrollo, consultar el estado
+verificado y los enlaces al código en la documentación nueva.
+
 This firmware allows an ESP32S3 running ESP-IDF to determine:
 
 - The street name
@@ -111,6 +126,7 @@ Designed for:
 ## 5. How the Firmware Operates
 
 #### Step 1 — GPS Input
+
 The firmware receives a GPS latitude and longitude, e.g.:
 ```
 float gpsLat = 41.6488853f;
@@ -119,6 +135,7 @@ float gpsLon = -87.5224172f;
 NOTE: This data would be received from NMEA compatible GPS tracker
 ```
 #### Step 2 — Tile Detection
+
 ```
 // using multiplication operation rather than division as it is faster
 // replacing value of "TILE_SIZE" from "0.01" to "100.0"
@@ -160,6 +177,7 @@ The application then:
 - Updates the speed-limit indicator
 
 ## 6. Building & Flashing the Firmware (ESP-IDF v5.4.2)
+
 Install ESP-IDF
 
 Follow official installation instructions:

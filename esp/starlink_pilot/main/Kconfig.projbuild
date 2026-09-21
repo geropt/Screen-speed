@@ -1,0 +1,101 @@
+menu "NMEA Configuration"
+
+    config NMEA_PARSER_UART_RXD
+        int "UART RXD pin number"
+        default 16 if IDF_TARGET_ESP32
+        default 18 if IDF_TARGET_ESP32S3
+        default 16
+        help
+            GPIO of the TTL RX from the Ruptela RS232 converter.
+            ESP32-WROOM: UART2 RX default GPIO16 (avoid UART1 on GPIO9/10, flash).
+            ESP32-S3 DevKit: GPIO18, same as the HUD.
+
+    config NMEA_PARSER_RING_BUFFER_SIZE
+        int "NMEA Parser Ring Buffer Size"
+        range 0 2048
+        default 1024
+
+    config NMEA_PARSER_UART_BAUD_RATE
+        int "GPS UART initial baud rate"
+        default 9600
+        help
+            First baud to probe. Auto-detects 9600 and 115200.
+
+    config NMEA_PARSER_TASK_STACK_SIZE
+        int "NMEA Parser Task Stack Size"
+        range 2048 8192
+        default 4096
+
+    config NMEA_PARSER_TASK_PRIORITY
+        int "NMEA Parser Task Priority"
+        range 0 24
+        default 2
+
+    menu "NMEA Statement Support"
+        config NMEA_STATEMENT_GGA
+            bool "GGA Statement"
+            default y
+        config NMEA_STATEMENT_GSA
+            bool "GSA Statement"
+            default y
+        config NMEA_STATEMENT_GSV
+            bool "GSV Statement"
+            default y
+        config NMEA_STATEMENT_RMC
+            bool "RMC Statement"
+            default y
+        config NMEA_STATEMENT_GLL
+            bool "GLL Statement"
+            default y
+        config NMEA_STATEMENT_VTG
+            bool "VTG Statement"
+            default y
+    endmenu
+endmenu
+
+menu "Starlink telematics"
+
+    config TELEM_WIFI_SSID
+        string "WiFi SSID (home / lab, 2.4 GHz)"
+        default "Personal-916-2.4GHz"
+        help
+            ESP32 classic (WROOM) only sees 2.4 GHz. Use the 2.4 GHz SSID, not 5 GHz.
+
+    config TELEM_WIFI_PASSWORD
+        string "WiFi password for first SSID"
+        default ""
+
+    config TELEM_WIFI_SSID_2
+        string "WiFi SSID 2 (office, 2.4 GHz)"
+        default "ClaroRS"
+
+    config TELEM_WIFI_PASSWORD_2
+        string "WiFi password for second SSID"
+        default ""
+
+    config TELEM_WIFI_SSID_3
+        string "WiFi SSID 3 (phone hotspot, 2.4 GHz)"
+        default "iPhone"
+
+    config TELEM_WIFI_PASSWORD_3
+        string "WiFi password for third SSID"
+        default ""
+
+    config TELEM_HOST
+        string "Ruptela TCP host"
+        default "46973.flespi.gw"
+
+    config TELEM_PORT
+        int "Ruptela TCP port"
+        default 29043
+        range 1 65535
+
+    config TELEM_T_DOWN_MS
+        int "GPRS-down dwell before connecting (ms)"
+        default 15000
+        range 0 120000
+
+    config TELEM_REQUIRE_IGNITION
+        bool "Require IO 409 ignition on to open TCP"
+        default n
+endmenu
