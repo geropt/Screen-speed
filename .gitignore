@@ -31,3 +31,7 @@ esp/starlink_pilot/host_tests/test_ruptela_proto
 # Cápsula generada para las pruebas de equivalencia
 esp/Firmware/host_tests/build/
 esp/*/build_ci/
+
+# Extractos OSM: GitHub rechaza archivos >100 MB
+*.osm.pbf
+argentina-260819.osm.pbf
